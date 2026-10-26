@@ -96,20 +96,35 @@
     <!-- ═══ ③ 上课中 ═══ -->
     <main v-else class="live">
       <div class="live-main">
-        <div class="video-stage card">
-          <video ref="videoRef" autoplay muted playsinline></video>
-          <div class="live-badge"><span class="rec-dot"></span>直播中 · {{ formatTime(classSeconds) }}</div>
-          <div v-if="!streamReady" class="video-hint">正在获取屏幕共享画面…</div>
+        <!-- 舞台：教学排版采集进来是 16:9，这里就固定 16:9，画面刚好铺满不留黑边 -->
+        <div class="stage-area">
+          <div class="video-stage card" ref="stageRef">
+            <video ref="videoRef" autoplay muted playsinline @click="toggleFullscreen"></video>
+            <div class="live-badge"><span class="rec-dot"></span>直播中 · {{ formatTime(classSeconds) }}</div>
+            <button class="fs-btn" :class="{ on: isFullscreen }" @click="toggleFullscreen"
+              :title="isFullscreen ? '退出全屏（Esc）' : '全屏观看'">
+              <svg v-if="!isFullscreen" viewBox="0 0 24 24" width="16" height="16" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 4H4v5M15 4h5v5M15 20h5v-5M9 20H4v-5" />
+              </svg>
+              <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 9h5V4M20 9h-5V4M20 15h-5v5M4 15h5v5" />
+              </svg>
+              <span>{{ isFullscreen ? '退出全屏' : '全屏' }}</span>
+            </button>
+            <div v-if="!streamReady" class="video-hint">正在获取屏幕共享画面…</div>
+          </div>
         </div>
 
         <div class="invite-card card">
           <div class="invite-info">
-            <div class="invite-title">学生上课链接</div>
-            <div class="invite-url">{{ classUrl }}</div>
+            <span class="invite-title">学生上课链接</span>
+            <span class="invite-url" :title="classUrl">{{ classUrl }}</span>
           </div>
           <div class="invite-actions">
-            <el-button type="primary" @click="copyLink">复制链接</el-button>
-            <el-button class="btn-ghost" @click="openLink">打开</el-button>
+            <el-button type="primary" size="small" @click="copyLink">复制链接</el-button>
+            <el-button class="btn-ghost" size="small" @click="openLink">打开</el-button>
           </div>
         </div>
 
@@ -226,6 +241,8 @@ const teacherNameInput = ref('')
 const teacherName = ref('')
 
 const videoRef = ref(null)
+const stageRef = ref(null)
+const isFullscreen = ref(false)
 const chatScroll = ref(null)
 
 const currentRoomId = ref('')
@@ -295,6 +312,58 @@ function copyLink() {
     navigator.clipboard.writeText(classUrl.value).then(() => ElMessage.success('链接已复制，发给学生即可'))
 }
 function openLink() { window.open(classUrl.value, '_blank') }
+
+// ── 全屏观看 ──
+// 优先用元素全屏（能保留「直播中」角标和退出按钮），iPhone Safari 不支持元素全屏，
+// 退回 <video> 自带的原生全屏播放器。
+function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null }
+
+async function toggleFullscreen() {
+    const el = stageRef.value
+    if (!el) return
+    if (fsElement()) {
+        try {
+            const exit = document.exitFullscreen || document.webkitExitFullscreen
+            if (exit) await exit.call(document)
+        } catch (e) { /* 忽略 */ }
+        return
+    }
+    if (el.requestFullscreen || el.webkitRequestFullscreen) {
+        try {
+            if (el.requestFullscreen) await el.requestFullscreen({ navigationUI: 'hide' })
+            else await el.webkitRequestFullscreen()
+            lockLandscape()
+        } catch (e) {
+            ElMessage.warning('浏览器不允许全屏，可按 F11')
+        }
+        return
+    }
+    const v = videoRef.value
+    if (v && v.webkitEnterFullscreen) {
+        try { v.webkitEnterFullscreen() } catch (e) { ElMessage.warning('当前浏览器不支持全屏') }
+    } else {
+        ElMessage.warning('当前浏览器不支持全屏，可按 F11')
+    }
+}
+
+// 手机上顺手锁横屏：讲课画面是 16:9，横着看才够大（不支持的浏览器直接忽略）
+function lockLandscape() {
+    try {
+        const o = screen.orientation
+        if (o && typeof o.lock === 'function') o.lock('landscape').catch(() => { })
+    } catch (e) { /* 忽略 */ }
+}
+function unlockOrientation() {
+    try {
+        const o = screen.orientation
+        if (o && typeof o.unlock === 'function') o.unlock()
+    } catch (e) { /* 忽略 */ }
+}
+function onFullscreenChange() {
+    const on = !!fsElement()
+    isFullscreen.value = on
+    if (!on) unlockOrientation()
+}
 
 // ── 学员音频播放（学生连线的声音）──
 const studentAudios = {}   // studentId → HTMLAudioElement
@@ -698,11 +767,17 @@ function onDocClick(e) {
 }
 onMounted(async () => {
     document.addEventListener('click', onDocClick)
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange)
     await getAudioDevices()
     navigator.mediaDevices.addEventListener('devicechange', getAudioDevices)
 })
 onBeforeUnmount(() => {
     document.removeEventListener('click', onDocClick)
+    document.removeEventListener('fullscreenchange', onFullscreenChange)
+    document.removeEventListener('webkitfullscreenchange', onFullscreenChange)
+    if (fsElement()) { try { (document.exitFullscreen || document.webkitExitFullscreen).call(document) } catch (e) { } }
+    unlockOrientation()
     if (isRecording.value) stopRecording()
     socketClosed = true
     stopVolumeDetection()
@@ -792,11 +867,27 @@ onBeforeUnmount(() => {
 .live-main { display: flex; flex-direction: column; gap: 1rem; min-width: 0; min-height: 0; }
 .live-rail { display: flex; flex-direction: column; gap: 1rem; min-height: 0; }
 
-.video-stage {
-  flex: 1; position: relative; background: #05070A; border-color: #222D3D;
-  overflow: hidden; min-height: 320px; display: flex;
+/* ═══ 画面舞台：固定 16:9 ═══
+   采集端（教学排版台）输出的是 16:9，这里按同样的比例开框，画面刚好铺满。
+   用容器查询单位算「能放下的最大 16:9 矩形」，纯 CSS 完成，窗口怎么拉都是 16:9。 */
+.stage-area {
+  flex: 1; min-height: 0;
+  container-type: size;
+  display: flex; align-items: center; justify-content: center;
 }
-.video-stage video { width: 100%; height: 100%; object-fit: contain; }
+.video-stage {
+  position: relative;
+  width: min(100cqw, calc(100cqh * 16 / 9));
+  aspect-ratio: 16 / 9;
+  margin: auto;
+  background: #05070A; border-color: #222D3D;
+  overflow: hidden; display: block;
+}
+/* cover：源画面正好 16:9 时与 contain 等效；源画面带着黑边时把黑边裁掉，绝不出现双重黑边 */
+.video-stage video {
+  display: block; width: 100%; height: 100%;
+  object-fit: cover; background: #05070A; cursor: zoom-in;
+}
 .video-hint {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   color: var(--text-3); font-size: .95rem; pointer-events: none;
@@ -805,19 +896,59 @@ onBeforeUnmount(() => {
   position: absolute; top: .8rem; left: .8rem; display: flex; align-items: center; gap: .45rem;
   background: rgba(10,14,20,.78); border: 1px solid var(--line-2); color: #FF7A7F;
   font-size: .78rem; padding: .28rem .8rem; border-radius: 999px; backdrop-filter: blur(8px);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: tabular-nums; pointer-events: none;
 }
 .rec-dot { width: .5rem; height: .5rem; border-radius: 50%; background: #FF5A5F; animation: recblink 1.2s infinite; }
 @keyframes recblink { 0%, 100% { opacity: 1 } 50% { opacity: .25 } }
 
+/* 全屏按钮：画面右下角，图标 + 文字，手机上也点得到 */
+.fs-btn {
+  position: absolute; right: .7rem; bottom: .7rem; z-index: 5;
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .42rem .8rem .42rem .65rem;
+  border-radius: 999px; border: 1px solid var(--line-2);
+  background: rgba(10,14,20,.72); color: var(--text-2);
+  font-size: .78rem; font-family: inherit; cursor: pointer;
+  backdrop-filter: blur(8px); transition: all .15s;
+}
+.fs-btn:hover { color: var(--gold); border-color: var(--gold-line); background: rgba(10,14,20,.92); }
+.fs-btn.on { color: var(--gold); border-color: var(--gold-line); }
+
+/* 全屏时铺满屏幕，画面用 contain（宁可留边也不裁掉讲课内容） */
+.video-stage:fullscreen,
+.video-stage:-webkit-full-screen {
+  width: 100vw; height: 100vh; aspect-ratio: auto;
+  margin: 0; border: 0; border-radius: 0; background: #000;
+}
+.video-stage:fullscreen video,
+.video-stage:-webkit-full-screen video { object-fit: contain; cursor: default; }
+.video-stage::backdrop { background: #000; }
+/* 全屏了但手机没转成横屏（部分浏览器不支持方向锁定）→ 提示横过来看 */
+@media (orientation: portrait) {
+  .video-stage:fullscreen::after,
+  .video-stage:-webkit-full-screen::after {
+    content: '↻ 把手机横过来看更清楚';
+    position: absolute; top: 1rem; left: 50%; transform: translateX(-50%);
+    padding: .4rem .9rem; border-radius: 999px;
+    background: rgba(10,14,20,.8); border: 1px solid var(--line-2);
+    color: var(--text-2); font-size: .8rem; white-space: nowrap;
+    pointer-events: none;
+  }
+}
+
 .invite-card {
-  display: flex; align-items: center; justify-content: space-between; gap: 1rem;
-  padding: .9rem 1.2rem; background: linear-gradient(90deg, var(--gold-soft), rgba(224,177,94,.05));
+  display: flex; align-items: center; justify-content: space-between; gap: .8rem;
+  padding: .55rem .9rem .55rem 1.1rem;
+  background: linear-gradient(90deg, var(--gold-soft), rgba(224,177,94,.05));
   border-color: var(--gold-line); flex-shrink: 0; flex-wrap: wrap;
 }
-.invite-title { font-weight: 600; color: var(--gold); font-size: .95rem; }
-.invite-url { color: var(--text-2); font-size: .82rem; margin-top: .2rem; word-break: break-all; }
-.invite-actions { display: flex; gap: .5rem; flex-shrink: 0; }
+.invite-info { display: flex; align-items: center; gap: .7rem; min-width: 0; flex: 1; }
+.invite-title { font-weight: 600; color: var(--gold); font-size: .88rem; white-space: nowrap; flex-shrink: 0; }
+.invite-url {
+  color: var(--text-2); font-size: .8rem; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.invite-actions { display: flex; gap: .4rem; flex-shrink: 0; }
 
 .audio-strip { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem 1.1rem; padding: .7rem 1.1rem; flex-shrink: 0; }
 .strip-group { display: flex; align-items: center; gap: .55rem; min-width: 0; }
@@ -872,26 +1003,32 @@ onBeforeUnmount(() => {
 }
 
 /* ═══ 桌面端：页面锁定视口高度，只有内部区域滚动 ═══ */
-@media (min-width: 1025px) {
+@media (min-width: 900px) {
   .salon { height: 100dvh; overflow: hidden; }
   .entry { overflow-y: auto; }
   .rail-card:not(.chat-card) { max-height: 38%; }
 }
 
 /* ═══ 响应式 ═══ */
-@media (max-width: 1024px) {
-  .live { grid-template-columns: 1fr; }
+@media (max-width: 899px) {
+  .live { grid-template-columns: 1fr; grid-template-rows: auto; align-content: start; }
   .live-rail { max-height: none; }
   .rail-card:not(.chat-card) { max-height: 36vh; }
-  .video-stage { min-height: 240px; }
+  /* 单列时让「宽度」决定画面尺寸：舞台不再抢剩余高度，避免在竖屏平板上撑成一大块 */
+  .stage-area { flex: none; display: block; container-type: normal; }
+  .video-stage { width: 100%; }
 }
 @media (max-width: 640px) {
   .topbar { padding: .6rem .9rem; }
-  .live { padding: .8rem; gap: .8rem; }
+  .live { padding: .8rem; gap: .75rem; }
+  .stage-area { flex: none; display: block; }
+  .video-stage { width: 100%; border-radius: var(--r-md); }
+  .live-badge { top: .5rem; left: .5rem; font-size: .72rem; padding: .22rem .62rem; }
+  .fs-btn { right: .5rem; bottom: .5rem; padding: .34rem .68rem .34rem .55rem; font-size: .74rem; }
+  .invite-card { flex-direction: column; align-items: stretch; gap: .5rem; padding: .6rem .8rem; }
+  .invite-actions { justify-content: flex-end; }
   .audio-strip { gap: .5rem .8rem; }
   .strip-select { width: 7.5rem; }
-  .invite-card { flex-direction: column; align-items: stretch; }
-  .invite-actions { justify-content: flex-end; }
   .student-actions .el-button { padding: .4rem .6rem; font-size: .78rem; }
   .chat-card { min-height: 18rem; }
   .mode-cards { grid-template-columns: 1fr; }

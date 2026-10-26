@@ -357,7 +357,8 @@ body::before {
 .vol-val { font-size: .72rem; color: var(--text-3); min-width: 2.4em; text-align: right; font-variant-numeric: tabular-nums; }
 
 /* ========== 响应式 ========== */
-@media (max-width: 1024px) {
+/* 只保留真正跨页面共用的规则；各页面自己的排版在组件内用 scoped 样式处理 */
+@media (max-width: 899px) {
   .live-grid { grid-template-columns: 1fr !important; }
   .live-rail { width: 100% !important; max-height: none !important; }
 }
@@ -367,9 +368,5 @@ body::before {
   .topbar { padding: .6rem .9rem !important; }
   .topbar-title { font-size: 1.05rem !important; }
   .hide-m { display: none !important; }
-  .live-main { padding: .8rem !important; gap: .8rem !important; }
-  .live-rail { padding: 0 .8rem .8rem !important; }
-  .video-stage { min-height: 30vh; }
-  .chat-card { height: 46vh; }
   .entry-card, .prep-card { padding: 1.6rem 1.2rem !important; }
 }

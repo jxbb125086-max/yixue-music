@@ -45,7 +45,7 @@
         </el-button>
         <div class="entry-steps">
           <div class="step"><i>1</i><span>输入姓名</span></div>
-          <div class="step"><i>2</i><span>看老师-screen</span></div>
+          <div class="step"><i>2</i><span>看讲课画面</span></div>
           <div class="step"><i>3</i><span>公屏互动</span></div>
         </div>
       </div>
@@ -54,9 +54,36 @@
     <!-- ═══ ② 上课中 ═══ -->
     <main v-else-if="!showErrorPage" class="live">
       <div class="live-main">
-        <div class="video-stage card">
-          <video ref="videoRef" autoplay playsinline></video>
-          <div v-if="!connected" class="video-hint"><span class="spinner"></span>正在连接老师的画面…</div>
+        <!-- 舞台：老师端采集的是 16:9，这里固定 16:9，画面刚好铺满；点画面或右下角按钮进全屏 -->
+        <div class="stage-area">
+          <div class="video-stage card" ref="stageRef">
+            <video ref="videoRef" autoplay playsinline @click="toggleFullscreen"></video>
+            <div v-if="!connected" class="video-hint"><span class="spinner"></span>正在连接老师的画面…</div>
+            <button class="fs-btn" :class="{ on: isFullscreen }" @click="toggleFullscreen"
+              :title="isFullscreen ? '退出全屏（Esc）' : '全屏观看'">
+              <svg v-if="!isFullscreen" viewBox="0 0 24 24" width="16" height="16" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 4H4v5M15 4h5v5M15 20h5v-5M9 20H4v-5" />
+              </svg>
+              <svg v-else viewBox="0 0 24 24" width="16" height="16" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 9h5V4M20 9h-5V4M20 15h-5v5M4 15h5v5" />
+              </svg>
+              <span>{{ isFullscreen ? '退出全屏' : '全屏' }}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 连线控制（主操作，放在画面正下方） -->
+        <div class="connect-zone">
+          <button class="connect-btn" :class="speakState" @click="onConnectClick">
+            <span class="connect-dot"></span>
+            <span class="connect-text">{{ connectText }}</span>
+            <span class="connect-sub">{{ connectSub }}</span>
+          </button>
+          <button v-if="speakState === 'live'" class="mute-btn" :class="{ off: !micOn }" @click="toggleMic">
+            {{ micOn ? '🎙 声音开启中' : '🔇 已静音' }}
+          </button>
         </div>
 
         <!-- 音频设置 -->
@@ -76,18 +103,6 @@
                 :label="d.label || '扬声器 ' + (audioDevices.speakers.indexOf(d)+1)" :value="d.deviceId" />
             </el-select>
           </div>
-        </div>
-
-        <!-- 连线控制 -->
-        <div class="connect-zone">
-          <button class="connect-btn" :class="speakState" @click="onConnectClick">
-            <span class="connect-dot"></span>
-            <span class="connect-text">{{ connectText }}</span>
-            <span class="connect-sub">{{ connectSub }}</span>
-          </button>
-          <button v-if="speakState === 'live'" class="mute-btn" :class="{ off: !micOn }" @click="toggleMic">
-            {{ micOn ? '🎙 声音开启中' : '🔇 已静音' }}
-          </button>
         </div>
       </div>
 
@@ -146,6 +161,8 @@ const SERVER_URL = import.meta.env && import.meta.env.DEV ? 'http://localhost:30
 const route = useRoute()
 const router = useRouter()
 const videoRef = ref(null)
+const stageRef = ref(null)
+const isFullscreen = ref(false)
 const chatScroll = ref(null)
 
 // ── 基础状态 ──
@@ -207,6 +224,56 @@ function sendChat() {
 }
 function insertEmoji(e) {
     chatInput.value += e
+}
+
+// ── 全屏观看 ──
+// 手机上「点画面」就横屏铺满看讲课；退出全屏回到正常排版，继续打字看公屏。
+// 优先元素全屏（能保留退出按钮），iPhone Safari 不支持元素全屏，退回 <video> 原生全屏。
+function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null }
+
+async function toggleFullscreen() {
+    const el = stageRef.value
+    if (!el) return
+    if (fsElement()) {
+        try {
+            const exit = document.exitFullscreen || document.webkitExitFullscreen
+            if (exit) await exit.call(document)
+        } catch (e) { /* 忽略 */ }
+        return
+    }
+    if (el.requestFullscreen || el.webkitRequestFullscreen) {
+        try {
+            if (el.requestFullscreen) await el.requestFullscreen({ navigationUI: 'hide' })
+            else await el.webkitRequestFullscreen()
+            lockLandscape()
+        } catch (e) {
+            ElMessage.warning('浏览器不允许全屏')
+        }
+        return
+    }
+    const v = videoRef.value
+    if (v && v.webkitEnterFullscreen) {
+        try { v.webkitEnterFullscreen() } catch (e) { ElMessage.warning('当前浏览器不支持全屏') }
+    } else {
+        ElMessage.warning('当前浏览器不支持全屏')
+    }
+}
+function lockLandscape() {
+    try {
+        const o = screen.orientation
+        if (o && typeof o.lock === 'function') o.lock('landscape').catch(() => { })
+    } catch (e) { /* 忽略 */ }
+}
+function unlockOrientation() {
+    try {
+        const o = screen.orientation
+        if (o && typeof o.unlock === 'function') o.unlock()
+    } catch (e) { /* 忽略 */ }
+}
+function onFullscreenChange() {
+    const on = !!fsElement()
+    isFullscreen.value = on
+    if (!on) unlockOrientation()
 }
 
 // ── 连线交互 ──
@@ -431,10 +498,19 @@ watch(() => chatMessages.value.length, () => {
 })
 
 onMounted(async () => {
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange)
     await getAudioDevices()
     navigator.mediaDevices.addEventListener('devicechange', getAudioDevices)
 })
-onBeforeUnmount(() => { socketClosed = true; disconnectAll() })
+onBeforeUnmount(() => {
+    socketClosed = true
+    document.removeEventListener('fullscreenchange', onFullscreenChange)
+    document.removeEventListener('webkitfullscreenchange', onFullscreenChange)
+    if (fsElement()) { try { (document.exitFullscreen || document.webkitExitFullscreen).call(document) } catch (e) { } }
+    unlockOrientation()
+    disconnectAll()
+})
 </script>
 
 <style scoped>
@@ -489,20 +565,73 @@ onBeforeUnmount(() => { socketClosed = true; disconnectAll() })
 }
 .live-main { display: flex; flex-direction: column; gap: 1rem; min-width: 0; min-height: 0; }
 
-.video-stage {
-  flex: 1; position: relative; background: #05070A; border-color: #222D3D;
-  overflow: hidden; min-height: 300px; display: flex;
+/* ═══ 画面舞台：固定 16:9 ═══
+   老师端采集的教学排版就是 16:9，这里按同样比例开框，画面刚好铺满、不留黑边。
+   用容器查询单位算「能放下的最大 16:9 矩形」，纯 CSS，窗口怎么拉都是 16:9。 */
+.stage-area {
+  flex: 1; min-height: 0;
+  container-type: size;
+  display: flex; align-items: center; justify-content: center;
 }
-.video-stage video { width: 100%; height: 100%; object-fit: contain; }
+.video-stage {
+  position: relative;
+  width: min(100cqw, calc(100cqh * 16 / 9));
+  aspect-ratio: 16 / 9;
+  margin: auto;
+  background: #05070A; border-color: #222D3D;
+  overflow: hidden; display: block;
+}
+/* cover：源画面正好 16:9 时与 contain 等效；源画面带黑边时把黑边裁掉，绝不出现双重黑边 */
+.video-stage video {
+  display: block; width: 100%; height: 100%;
+  object-fit: cover; background: #05070A; cursor: zoom-in;
+}
 .video-hint {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-  gap: .7rem; color: var(--text-2); font-size: .95rem;
+  gap: .7rem; color: var(--text-2); font-size: .95rem; pointer-events: none;
 }
 .spinner {
   width: 1.3rem; height: 1.3rem; border: 2.5px solid #2A3444; border-top-color: var(--gold);
   border-radius: 50%; animation: spin .9s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* 全屏按钮：画面右下角，图标 + 文字，手机上也点得到 */
+.fs-btn {
+  position: absolute; right: .7rem; bottom: .7rem; z-index: 5;
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .42rem .8rem .42rem .65rem;
+  border-radius: 999px; border: 1px solid var(--line-2);
+  background: rgba(10,14,20,.72); color: var(--text-2);
+  font-size: .78rem; font-family: inherit; cursor: pointer;
+  backdrop-filter: blur(8px); transition: all .15s;
+}
+.fs-btn:hover { color: var(--gold); border-color: var(--gold-line); background: rgba(10,14,20,.92); }
+.fs-btn.on { color: var(--gold); border-color: var(--gold-line); }
+
+/* 全屏时铺满屏幕；画面用 contain —— 宁可两侧留黑边，也不裁掉讲课内容 */
+.video-stage:fullscreen,
+.video-stage:-webkit-full-screen {
+  width: 100vw; height: 100vh; aspect-ratio: auto;
+  margin: 0; border: 0; border-radius: 0; background: #000;
+}
+.video-stage:fullscreen video,
+.video-stage:-webkit-full-screen video { object-fit: contain; cursor: default; }
+.video-stage:fullscreen .fs-btn,
+.video-stage:-webkit-full-screen .fs-btn { right: 1rem; bottom: 1rem; }
+.video-stage::backdrop { background: #000; }
+/* 全屏了但手机没转成横屏（部分浏览器不支持方向锁定）→ 提示横过来看 */
+@media (orientation: portrait) {
+  .video-stage:fullscreen::after,
+  .video-stage:-webkit-full-screen::after {
+    content: '↻ 把手机横过来看更清楚';
+    position: absolute; top: 1rem; left: 50%; transform: translateX(-50%);
+    padding: .4rem .9rem; border-radius: 999px;
+    background: rgba(10,14,20,.8); border: 1px solid var(--line-2);
+    color: var(--text-2); font-size: .8rem; white-space: nowrap;
+    pointer-events: none;
+  }
+}
 
 /* 音频设置条 */
 .audio-bar { display: flex; align-items: center; gap: 1.2rem; padding: .65rem 1rem; flex-shrink: 0; flex-wrap: wrap; }
@@ -595,29 +724,36 @@ onBeforeUnmount(() => { socketClosed = true; disconnectAll() })
 .error-actions .el-button { flex: 1; }
 
 /* ═══ 桌面端：页面锁定视口高度，只有聊天栏内部滚动 ═══ */
-@media (min-width: 1025px) {
+@media (min-width: 900px) {
   .student { height: 100dvh; overflow: hidden; }
   .entry { overflow-y: auto; }
 }
 
-/* ═══ 响应式：平板 ═══ */
-@media (max-width: 1024px) {
-  .live { grid-template-columns: 1fr; }
-  .video-stage { min-height: 240px; }
+/* ═══ 响应式：平板（单列，宽度决定画面尺寸）═══ */
+@media (max-width: 899px) {
+  .live { grid-template-columns: 1fr; grid-template-rows: auto; align-content: start; }
+  .stage-area { flex: none; display: block; container-type: normal; }
+  .video-stage { width: 100%; }
   .chat-card { min-height: 20rem; }
 }
 
-/* ═══ 响应式：手机 ═══ */
+/* ═══ 响应式：手机（画面 16:9 打头 → 连线 → 音频 → 公屏）═══
+   改成竖向 flex：公屏吃掉剩余高度，一屏刚好铺满，不用来回滚。
+   页面本身仍然可以滚（输入法弹起来时能把输入框滚进视野）。 */
 @media (max-width: 640px) {
   .topbar { padding: .6rem .9rem; }
-  .live { padding: .8rem; gap: .8rem; }
-  .video-stage { min-height: 0; aspect-ratio: 16 / 10; flex: none; }
+  .live { display: flex; flex-direction: column; padding: .7rem; gap: .7rem; }
+  .live-main { flex: none; gap: .7rem; }
+  .stage-area { flex: none; display: block; }
+  .video-stage { width: 100%; border-radius: var(--r-md); }
+  .fs-btn { right: .5rem; bottom: .5rem; padding: .34rem .68rem .34rem .55rem; font-size: .74rem; }
   .audio-bar { gap: .6rem 1rem; padding: .55rem .8rem; }
   .audio-select { width: 8rem; }
+  .connect-zone { gap: .6rem; }
   .connect-btn { min-height: 4rem; }
   .connect-btn .connect-text { font-size: 1.05rem; }
-  .mute-btn { min-height: 4rem; }
-  .chat-card { min-height: 0; height: 50vh; }
+  .mute-btn { min-height: 4rem; padding: .7rem .9rem; }
+  .chat-card { flex: 1; min-height: 16rem; }
   .entry-card { padding: 2rem 1.4rem; }
   .entry-steps { gap: .8rem; }
   .emoji-btn { width: 2.7rem; height: 2.7rem; }

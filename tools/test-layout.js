@@ -1,0 +1,89 @@
+// 验证：老师端 / 学员端的画面舞台在任意窗口尺寸下都是 16:9，且不与其它功能区重叠
+const { chromium, newPage, teacherGoLive, studentJoin, measureStage, ratioOk } = require('./lib');
+
+const DESKTOP = [
+  [1920, 1080, '1920×1080'],
+  [1440, 900, '1440×900'],
+  [1280, 800, '1280×800'],
+  [1024, 768, '1024×768 4:3'],
+  [1600, 700, '1600×700 扁'],
+];
+const MOBILE = [
+  [390, 844, '390×844 iPhone'],
+  [360, 780, '360×780 小安卓'],
+  [430, 932, '430×932 大屏手机'],
+  [768, 1024, '768×1024 竖屏平板'],
+];
+
+(async () => {
+  const browser = await chromium.launch({ channel: 'chrome', headless: true });
+  const out = [];
+  let fail = 0;
+
+  function check(tag, m, opts = {}) {
+    const problems = [];
+    if (!m.stage) { problems.push('没有 .video-stage'); }
+    else {
+      if (!ratioOk(m)) problems.push(`比例 ${m.stage.ratio} ≠ 16:9`);
+      if (m.stage.w < 120) problems.push(`画面太窄 ${m.stage.w}px`);
+      if (m.video && (Math.abs(m.video.w - m.stage.w) > 2 || Math.abs(m.video.h - m.stage.h) > 2))
+        problems.push(`video 没铺满舞台 ${m.video.w}×${m.video.h} vs ${m.stage.w}×${m.stage.h}`);
+      if (m.objectFit !== 'cover') problems.push(`object-fit=${m.objectFit}（应为 cover）`);
+      // 与下方功能区不能重叠
+      if (m.below && m.below.t < m.stage.b - 1) problems.push(`与下方功能区重叠 ${m.below.t} < ${m.stage.b}`);
+      if (m.area && (m.stage.t < m.area.t - 1 || m.stage.b > m.area.b + 1)) problems.push('舞台超出舞台区');
+    }
+    if (m.overflowX > 1) problems.push(`横向溢出 ${m.overflowX}px`);
+    if (opts.noScrollY && m.overflowY > 1) problems.push(`纵向溢出 ${m.overflowY}px`);
+    // 公屏必须一屏可见（不用滚），且在宽屏时应位于画面右侧
+    if (opts.chatRight && m.rail && m.rail.l < m.stage.r - 1) problems.push('公屏没在画面右侧');
+    if (opts.chatVisible && m.rail && m.rail.b > m.vh + 1) problems.push(`公屏超出视口 ${m.rail.b - m.vh}px`);
+
+    const ok = problems.length === 0;
+    if (!ok) fail++;
+    out.push(`${ok ? '✅' : '❌'} ${tag}  画面 ${m.stage ? m.stage.w + '×' + m.stage.h + ' (' + m.stage.ratio + ')' : '-'}`
+      + (ok ? '' : '  ← ' + problems.join('；')));
+  }
+
+  // ── 老师端 ──
+  for (const [w, h, name] of DESKTOP) {
+    const { ctx, page, errors } = await newPage(browser, { width: w, height: h });
+    await teacherGoLive(page);
+    const m = await measureStage(page);
+    check(`老师 ${name}`, m, { noScrollY: w >= 900 });
+    const real = errors.filter(e => !/no mic in test|获取设备失败/.test(e));
+    if (real.length) out.push(`   ⚠ 老师 ${name} 报错: ${real[0]}`);
+    await ctx.close();
+  }
+
+  // ── 学员端桌面 ──
+  for (const [w, h, name] of DESKTOP) {
+    const { ctx, page } = await newPage(browser, { width: w, height: h });
+    await studentJoin(page, '999999');
+    const m = await measureStage(page);
+    check(`学员 ${name}`, m, { noScrollY: w >= 900, chatRight: w >= 900, chatVisible: true });
+    await ctx.close();
+  }
+
+  // ── 学员端移动端 ──
+  for (const [w, h, name] of MOBILE) {
+    const { ctx, page } = await newPage(browser, { width: w, height: h });
+    await studentJoin(page, '999999');
+    const m = await measureStage(page);
+    check(`学员 ${name}`, m);
+    // 手机上「画面 → 连线 → 音频 → 公屏」的顺序要正确
+    const order = await page.evaluate(() => {
+      const y = s => { const e = document.querySelector(s); return e ? e.getBoundingClientRect().top : null; };
+      return { stage: y('.video-stage'), connect: y('.connect-zone'), audio: y('.audio-bar'), chat: y('.chat-card') };
+    });
+    const okOrder = order.stage < order.connect && order.connect < order.audio && order.audio < order.chat;
+    if (!okOrder) fail++;
+    out.push(`${okOrder ? '✅' : '❌'} 学员 ${name} 顺序 画面(${Math.round(order.stage)}) < 连线(${Math.round(order.connect)}) < 音频(${Math.round(order.audio)}) < 公屏(${Math.round(order.chat)})`);
+    await ctx.close();
+  }
+
+  console.log(out.join('\n'));
+  console.log(fail ? `\n❌ 失败 ${fail} 项` : '\n✅ 全部通过：画面舞台处处 16:9，版式无重叠无溢出');
+  await browser.close();
+  process.exit(fail ? 1 : 0);
+})();
