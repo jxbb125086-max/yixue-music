@@ -266,6 +266,9 @@ html.stage-locked body { overflow: hidden !important; }
   color: var(--text);
   box-shadow: var(--el-box-shadow);
   min-width: 200px;
+  /* 顶栏中间现在放着学生链接，提示条整体下移到顶栏下方，别盖住它。
+     用 margin 而不是 top，这样多条堆叠时的间距不受影响。 */
+  margin-top: 3.4rem;
 }
 .el-message--success { border-color: rgba(62,207,142,.45); }
 .el-message--success .el-message__content { color: var(--green); }

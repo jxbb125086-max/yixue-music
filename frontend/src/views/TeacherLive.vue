@@ -13,6 +13,12 @@
         </svg>
         <span class="topbar-title">易学音乐沙龙</span>
       </div>
+      <div v-if="stage === 'live'" class="topbar-link">
+        <span class="tl-label">学生链接</span>
+        <span class="tl-url" :title="classUrl">{{ classUrl }}</span>
+        <button class="tl-btn" @click="copyLink">复制</button>
+        <button class="tl-btn ghost hide-m" @click="openLink">打开</button>
+      </div>
       <div class="topbar-right">
         <span v-if="stage === 'live'" class="chip gold hide-m">房间 {{ currentRoomId }}</span>
         <span v-if="teacherName" class="chip hide-m">{{ teacherName }} · 老师</span>
@@ -94,10 +100,10 @@
     </main>
 
     <!-- ═══ ③ 上课中 ═══ -->
-    <main v-else class="live">
+    <main v-else class="live" ref="liveRef">
       <div class="live-main" ref="mainRef">
         <!-- 舞台：教学排版采集进来是 16:9，这里就固定 16:9，画面刚好铺满不留黑边 -->
-        <div class="stage-area" :class="{ 'is-immersive': immersive }">
+        <div class="stage-area" ref="areaRef" :class="{ 'is-immersive': immersive }">
           <div class="video-stage card" ref="stageRef" :class="{ immersive }">
             <video ref="videoRef" autoplay muted playsinline></video>
             <div class="live-badge"><span class="rec-dot"></span>直播中 · {{ formatTime(classSeconds) }}</div>
@@ -128,17 +134,6 @@
             <span>退出全屏</span>
           </button>
         </template>
-
-        <div class="invite-card card">
-          <div class="invite-info">
-            <span class="invite-title">学生上课链接</span>
-            <span class="invite-url" :title="classUrl">{{ classUrl }}</span>
-          </div>
-          <div class="invite-actions">
-            <el-button type="primary" size="small" @click="copyLink">复制链接</el-button>
-            <el-button class="btn-ghost" size="small" @click="openLink">打开</el-button>
-          </div>
-        </div>
 
         <div class="audio-strip card">
           <div class="strip-group">
@@ -177,7 +172,7 @@
             <span class="chip">{{ students.length }} 人在线</span>
           </header>
           <div v-if="!students.length" class="rail-empty">
-            还没有学员加入<br/>把上方的学生链接发给学员即可
+            还没有学员加入<br/>把顶栏的学生链接发给学员即可
           </div>
           <div class="student-scroll">
             <div v-for="u in students" :key="u.id" class="student-row" :class="{ speaking: u.micOn }">
@@ -255,6 +250,8 @@ const teacherName = ref('')
 const videoRef = ref(null)
 const stageRef = ref(null)
 const mainRef = ref(null)
+const areaRef = ref(null)
+const liveRef = ref(null)
 const nativeFs = ref(false)     // 浏览器全屏中
 const immersive = ref(false)    // CSS 沉浸式全屏中
 const chatScroll = ref(null)
@@ -332,27 +329,41 @@ function copyLink() {
 }
 function openLink() { window.open(classUrl.value, '_blank') }
 
-// ── 让播放框下面的功能框跟播放框一样宽 ──
-// 播放框是 16:9，宽度由容器高宽比算出来，可能比整列窄；下面的链接卡、音频条原来铺满
-// 整列，看起来就上下不齐。这里把播放框的真实宽度写进 --stage-w，两块跟着一起走。
-let stageRO = null
-function syncStageWidth() {
-    const stage = stageRef.value, main = mainRef.value
-    if (!stage || !main || !stage.isConnected) return
-    if (immersive.value || nativeFs.value) return   // 全屏时播放框铺满视口，量了没意义
-    const w = Math.round(stage.getBoundingClientRect().width)
-    if (w > 0) main.style.setProperty('--stage-w', w + 'px')
+// ── 主列宽度 = 画面宽度，右栏吃掉所有剩余宽度 ──
+// 画面是 16:9，窗口又宽又扁时会被「高度」卡住、比整列窄，于是画面和右栏之间空出一大块。
+// 这里直接把主列宽度锁成画面宽度，右栏 flex 吃满剩余 → 任何尺寸都没有空隙。
+// 关键：必须按「舞台可用高度」反算，绝不能按「当前画面宽度」迭代，
+// 否则 width 变窄 → 可用高度变小 → 算出来更窄，会一路缩到底（自反馈死循环）。
+let liveRO = null
+function layoutLive() {
+    const live = liveRef.value, area = areaRef.value, main = mainRef.value
+    if (!live || !area || !main || !live.isConnected) return
+    if (immersive.value || nativeFs.value) return       // 全屏时画面铺满视口，不用算
+    if (window.innerWidth < 900) { main.style.width = ''; return }  // 单列布局，交给 CSS
+    const availH = area.clientHeight
+    if (availH < 120) return
+    const cs = getComputedStyle(live)
+    const totalW = live.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+    const gap = 16
+    // 右栏的理想宽度（跟原来的 CSS clamp 一致），画面放得下就按它，放不下再让右栏吃剩余
+    const railIdeal = Math.min(Math.max(window.innerWidth * 0.27, 352), 496)
+    const byHeight = Math.round(availH * 16 / 9)
+    const byWidth = Math.round(totalW - railIdeal - gap)
+    const w = Math.max(320, Math.min(byHeight, byWidth))
+    main.style.width = w + 'px'
 }
-function watchStageWidth() {
-    const stage = stageRef.value
-    if (!stage || typeof ResizeObserver === 'undefined') { syncStageWidth(); return }
-    if (stageRO) stageRO.disconnect()
-    stageRO = new ResizeObserver(syncStageWidth)
-    stageRO.observe(stage)
-    syncStageWidth()
+function watchLiveLayout() {
+    const live = liveRef.value
+    if (!live) return
+    if (typeof ResizeObserver === 'undefined') { layoutLive(); return }
+    if (liveRO) liveRO.disconnect()
+    liveRO = new ResizeObserver(layoutLive)
+    liveRO.observe(live)
+    // 首帧音频条可能先换行再回单行，量两遍就稳了
+    requestAnimationFrame(() => { layoutLive(); requestAnimationFrame(layoutLive) })
 }
-function unwatchStageWidth() {
-    if (stageRO) { stageRO.disconnect(); stageRO = null }
+function unwatchLiveLayout() {
+    if (liveRO) { liveRO.disconnect(); liveRO = null }
 }
 
 // ── 全屏观看 ──
@@ -368,7 +379,7 @@ function setImmersive(on) {
     immersive.value = next
     document.documentElement.classList.toggle('stage-locked', next)
     if (next) lockLandscape()
-    else { unlockOrientation(); resumeVideoSoon(); nextTick(syncStageWidth) }
+    else { unlockOrientation(); resumeVideoSoon(); nextTick(layoutLive) }
 }
 
 async function toggleFullscreen() {
@@ -444,7 +455,7 @@ function onFullscreenChange() {
     nativeFs.value = !!fsElement()
     if (!nativeFs.value) unlockOrientation()
     resumeVideoSoon()   // ← 关键：进出全屏都立刻续播
-    nextTick(syncStageWidth)
+    nextTick(layoutLive)
 }
 function onKeydown(e) {
     if (e.key !== 'Escape') return
@@ -685,7 +696,7 @@ async function startClass() {
                 if (selectedSpeaker.value && typeof videoRef.value.setSinkId === 'function')
                     videoRef.value.setSinkId(selectedSpeaker.value).catch(() => { })
             }
-            watchStageWidth()
+            watchLiveLayout()
         })
 
         // 屏幕共享被手动停止时，自动停录制 + 更新 UI
@@ -873,7 +884,7 @@ onBeforeUnmount(() => {
     if (fsElement()) { try { (document.exitFullscreen || document.webkitExitFullscreen).call(document) } catch (e) { } }
     setImmersive(false)
     unlockOrientation()
-    unwatchStageWidth()
+    unwatchLiveLayout()
     if (isRecording.value) stopRecording()
     socketClosed = true
     stopVolumeDetection()
@@ -900,9 +911,32 @@ onBeforeUnmount(() => {
   position: sticky; top: 0; z-index: 50;
   flex-shrink: 0;
 }
-.brand { display: flex; align-items: center; gap: .65rem; }
+.brand { display: flex; align-items: center; gap: .65rem; flex-shrink: 0; }
 .topbar-title { font-size: 1.2rem; font-weight: 600; letter-spacing: .02em; }
-.topbar-right { display: flex; align-items: center; gap: .6rem; }
+.topbar-right { display: flex; align-items: center; gap: .6rem; flex-shrink: 0; }
+
+/* 顶栏里的学生链接：原来那条占地方的邀请卡挪到这里，画面因此多出 58px 高度 */
+.topbar-link {
+  display: flex; align-items: center; gap: .5rem; min-width: 0;
+  flex: 1 1 auto; max-width: 40rem; margin: 0 1.2rem;
+  padding: .26rem .3rem .26rem .8rem;
+  background: var(--gold-soft); border: 1px solid var(--gold-line); border-radius: 999px;
+}
+.tl-label { font-size: .76rem; color: var(--gold); white-space: nowrap; flex-shrink: 0; font-weight: 600; }
+.tl-url {
+  flex: 1; min-width: 0; font-size: .78rem; color: var(--text-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.tl-btn {
+  flex-shrink: 0; padding: .2rem .62rem; border-radius: 999px;
+  border: 1px solid transparent; background: var(--gold); color: #1A1408;
+  font-size: .74rem; font-weight: 600; font-family: inherit; cursor: pointer;
+  transition: filter .15s, background .15s;
+}
+.tl-btn:hover { filter: brightness(1.1); }
+.tl-btn.ghost { background: transparent; border-color: var(--gold-line); color: var(--gold); font-weight: 500; }
+.tl-btn.ghost:hover { background: rgba(224,177,94,.15); filter: none; }
 
 /* ═══ ① 进入页 ═══ */
 .entry { flex: 1; display: flex; align-items: center; justify-content: center; padding: 2rem 1.2rem; }
@@ -953,26 +987,24 @@ onBeforeUnmount(() => {
   margin: 1.2rem 0 0; padding: .8rem 1rem; background: rgba(255,255,255,.03); border-radius: var(--r-md);
 }
 
-/* ═══ ③ 上课中 ═══ */
+/* ═══ ③ 上课中 ═══
+   主列宽度由 JS 锁成「画面宽度」，右栏 flex 吃掉所有剩余宽度 —— 任何窗口尺寸都不会
+   在画面和右栏之间留下空白（画面是 16:9，扁窗口下会被高度卡住而比整列窄）。 */
 .live {
-  flex: 1; display: grid; gap: 1rem; padding: 1rem 1.4rem 1.4rem;
-  /* 右栏跟着屏幕宽度长大：22rem 起步，27vw 最好，31rem 封顶 */
-  grid-template-columns: minmax(0, 1fr) clamp(22rem, 27vw, 31rem);
-  grid-template-rows: minmax(0, 1fr);
+  flex: 1; display: flex; gap: 1rem; padding: 1rem 1.4rem 1.4rem;
   min-height: 0;
 }
 .live-main {
+  flex: 0 0 auto; width: 100%;
   display: flex; flex-direction: column; gap: 1rem;
   min-width: 0; min-height: 0;
-  /* 播放框的真实宽度（JS 写入），下面的功能框跟着它走 */
-  --stage-w: 100%;
 }
-.live-rail { display: flex; flex-direction: column; gap: 1rem; min-height: 0; }
+/* min-width 保证极窄屏时右栏不会被画面挤没 */
+.live-rail { flex: 1 1 auto; min-width: 22rem; display: flex; flex-direction: column; gap: 1rem; min-height: 0; }
 
 /* ═══ 画面舞台：固定 16:9 ═══
    采集端（教学排版台）输出的是 16:9，这里按同样的比例开框，画面刚好铺满。
-   用容器查询单位算「能放下的最大 16:9 矩形」，纯 CSS 完成，窗口怎么拉都是 16:9。
-   靠左摆：画面右边留出的空档归右栏，整组（画面 + 下方功能框）因此整体左移。 */
+   用容器查询单位算「能放下的最大 16:9 矩形」，纯 CSS 完成，窗口怎么拉都是 16:9。 */
 .stage-area {
   flex: 1; min-height: 0;
   container-type: size;
@@ -1086,26 +1118,10 @@ onBeforeUnmount(() => {
 }
 .resume-btn:hover { background: rgba(224,177,94,.18); }
 
-.invite-card {
-  display: flex; align-items: center; justify-content: space-between; gap: .8rem;
-  padding: .55rem .9rem .55rem 1.1rem;
-  background: linear-gradient(90deg, var(--gold-soft), rgba(224,177,94,.05));
-  border-color: var(--gold-line); flex-shrink: 0; flex-wrap: wrap;
-  /* 跟播放框同宽 */
-  width: var(--stage-w);
-}
-.invite-info { display: flex; align-items: center; gap: .7rem; min-width: 0; flex: 1; }
-.invite-title { font-weight: 600; color: var(--gold); font-size: .88rem; white-space: nowrap; flex-shrink: 0; }
-.invite-url {
-  color: var(--text-2); font-size: .8rem; min-width: 0;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.invite-actions { display: flex; gap: .4rem; flex-shrink: 0; }
-
 .audio-strip {
   display: flex; align-items: center; flex-wrap: wrap; gap: .6rem 1.1rem;
   padding: .7rem 1.1rem; flex-shrink: 0;
-  width: var(--stage-w);   /* 跟播放框同宽 */
+  width: 100%;   /* 主列宽度已等于画面宽度，这里自然同宽 */
 }
 .strip-group { display: flex; align-items: center; gap: .55rem; min-width: 0; }
 .strip-label { font-size: .82rem; color: var(--text-2); white-space: nowrap; }
@@ -1162,19 +1178,21 @@ onBeforeUnmount(() => {
 @media (min-width: 900px) {
   .salon { height: 100dvh; overflow: hidden; }
   .entry { overflow-y: auto; }
-  .rail-card:not(.chat-card) { max-height: 42%; }
+  /* 学员卡按人数长高，最多占右栏 55%，再多才在卡内滚动（原来 42% 放 3 个人就切半行） */
+  .rail-card:not(.chat-card) { max-height: 55%; }
 }
 
 /* ═══ 响应式 ═══ */
 @media (max-width: 899px) {
-  .live { grid-template-columns: 1fr; grid-template-rows: auto; align-content: start; }
-  .live-rail { max-height: none; }
+  .live { flex-direction: column; }
+  .live-main { width: 100%; }
+  .live-rail { min-width: 0; max-height: none; }
   .rail-card:not(.chat-card) { max-height: 36vh; }
   /* 单列时让「宽度」决定画面尺寸：舞台不再抢剩余高度，避免在竖屏平板上撑成一大块 */
   .stage-area { flex: none; display: block; container-type: normal; }
   .video-stage { width: 100%; }
-  /* 单列时整列等宽，功能框回到 100% */
-  .invite-card, .audio-strip { width: 100%; }
+  .audio-strip { width: 100%; }
+  .topbar-link { margin: 0 .6rem; }
 }
 @media (max-width: 640px) {
   .topbar { padding: .6rem .9rem; }
@@ -1183,12 +1201,13 @@ onBeforeUnmount(() => {
   .video-stage { width: 100%; border-radius: var(--r-md); }
   .live-badge { top: .5rem; left: .5rem; font-size: .72rem; padding: .22rem .62rem; }
   .fs-btn { right: .5rem; bottom: .5rem; padding: .34rem .68rem .34rem .55rem; font-size: .74rem; }
-  .invite-card { flex-direction: column; align-items: stretch; gap: .5rem; padding: .6rem .8rem; }
-  .invite-actions { justify-content: flex-end; }
   .audio-strip { gap: .5rem .8rem; }
   .strip-select { width: 7.5rem; }
   .student-actions .el-button { padding: .4rem .6rem; font-size: .78rem; }
   .chat-card { min-height: 18rem; }
   .mode-cards { grid-template-columns: 1fr; }
+  /* 手机上顶栏太挤：只留「学生链接」标签和复制按钮，URL 由标题浮层看 */
+  .topbar-link { margin: 0 .5rem; padding: .22rem .26rem .22rem .6rem; }
+  .tl-url { display: none; }
 }
 </style>

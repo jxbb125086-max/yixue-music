@@ -44,7 +44,7 @@ function inFrame(s) {
 async function startTeacher(browser) {
   const t = await newPage(browser, { width: 1440, height: 900 });
   await teacherGoLive(t.page);
-  const url = (await t.page.textContent('.invite-url') || '').trim();
+  const url = (await t.page.textContent('.tl-url') || '').trim();
   return { ...t, roomId: (url.match(/\/student\/(\d+)/) || [])[1] };
 }
 
@@ -205,11 +205,11 @@ async function joinStudent(browser, roomId, viewport, opts = {}) {
       fs: !!document.fullscreenElement,
       badge: getComputedStyle(document.querySelector('.live-badge')).display,
       stageW: Math.round(document.querySelector('.video-stage').getBoundingClientRect().width),
-      inviteW: Math.round(document.querySelector('.invite-card').getBoundingClientRect().width),
+      inviteW: Math.round(document.querySelector('.audio-strip').getBoundingClientRect().width),
     }));
     ok(!back.fs, '老师端退出全屏');
     ok(back.badge !== 'none', '退出后徽标回来');
-    ok(Math.abs(back.stageW - back.inviteW) <= 2, `★ 退出后链接卡仍与画面同宽（${back.inviteW} vs ${back.stageW}）`);
+    ok(Math.abs(back.stageW - back.inviteW) <= 2, `★ 退出后音频条仍与画面同宽（${back.inviteW} vs ${back.stageW}）`);
   }
 
   const realErr = t.errors.filter(e => !/no mic in test|获取设备失败/.test(e));

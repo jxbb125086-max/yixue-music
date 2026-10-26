@@ -12,7 +12,7 @@ function ok(cond, msg) { if (!cond) fail++; out.push(`${cond ? '✅' : '❌'} ${
   // 老师开课
   const t = await newPage(browser, { width: 1440, height: 900 });
   await teacherGoLive(t.page);
-  const url = (await t.page.textContent('.invite-url') || '').trim();
+  const url = (await t.page.textContent('.tl-url') || '').trim();
   const roomId = (url.match(/\/student\/(\d+)/) || [])[1];
   ok(!!roomId, `老师已开课，房间号 ${roomId || '(没拿到)'}`);
 

@@ -46,7 +46,16 @@ const MOBILE = [
         problems.push(`音频条 ${m.bar.w}px ≠ 播放框 ${m.stage.w}px`);
       if (m.below && Math.abs(m.below.l - m.stage.l) > 2)
         problems.push(`下方功能框左边 ${m.below.l} ≠ 播放框左边 ${m.stage.l}`);
+      // 画面和右栏之间不能留空白（右栏要吃掉全部剩余宽度）
+      if (m.rail && m.stage && m.rail.l - m.stage.r > 20)
+        problems.push(`画面与右栏之间空出 ${m.rail.l - m.stage.r}px`);
     }
+    // 桌面学员端：连线卡在右栏、公屏上方，且比公屏窄不了多少
+    if (opts.connectInRail && m.conn) {
+      if (m.rail && m.conn.l < m.rail.l - 2) problems.push('连线卡没在右栏');
+      if (m.conn.t > m.stage.t) problems.push('连线卡应该和画面同高起头');
+    }
+    if (opts.connectInRail && !m.conn) problems.push('桌面学员端没有 .connect-card');
 
     const ok = problems.length === 0;
     if (!ok) fail++;
@@ -70,7 +79,7 @@ const MOBILE = [
     const { ctx, page } = await newPage(browser, { width: w, height: h });
     await studentJoin(page, '999999');
     const m = await measureStage(page);
-    check(`学员 ${name}`, m, { noScrollY: w >= 900, chatRight: w >= 900, chatVisible: true, alignBelow: w >= 900 });
+    check(`学员 ${name}`, m, { noScrollY: w >= 900, chatRight: w >= 900, chatVisible: true, alignBelow: w >= 900, connectInRail: w >= 900 });
     await ctx.close();
   }
 

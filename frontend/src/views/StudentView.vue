@@ -52,10 +52,10 @@
     </main>
 
     <!-- ═══ ② 上课中 ═══ -->
-    <main v-else-if="!showErrorPage" class="live">
+    <main v-else-if="!showErrorPage" class="live" ref="liveRef">
       <div class="live-main" ref="mainRef">
         <!-- 舞台：老师端采集的是 16:9，这里固定 16:9，画面刚好铺满；全屏只走右下角按钮 -->
-        <div class="stage-area" :class="{ 'is-immersive': immersive }">
+        <div class="stage-area" ref="areaRef" :class="{ 'is-immersive': immersive }">
           <div class="video-stage card" ref="stageRef" :class="{ immersive }">
             <video ref="videoRef" autoplay playsinline></video>
             <div v-if="!connected" class="video-hint"><span class="spinner"></span>正在连接老师的画面…</div>
@@ -75,9 +75,9 @@
           </div>
         </div>
 
-        <!-- 连线控制（主操作，放在画面正下方） -->
-        <div class="connect-zone">
-          <button class="connect-btn" :class="speakState" @click="onConnectClick">
+        <!-- 连线控制（手机上的主操作，放在画面正下方；桌面上挪进右栏，见 .connect-card） -->
+        <div v-if="!isWide" class="connect-zone">
+          <button class="connect-btn" :class="'is-' + speakState" @click="onConnectClick">
             <span class="connect-dot"></span>
             <span class="connect-text">{{ connectText }}</span>
             <span class="connect-sub">{{ connectSub }}</span>
@@ -118,6 +118,23 @@
         </button>
       </template>
 
+      <!-- 右栏：桌面放「连线卡 + 公屏」，手机只放公屏 -->
+      <div class="live-rail">
+        <!-- 桌面：接受连线挪到公屏上方，做成紧凑一行（原来横在画面下方那条太大了） -->
+        <section v-if="isWide" class="card connect-card" :class="'is-' + speakState">
+          <span class="cc-dot"></span>
+          <div class="cc-meta">
+            <b class="cc-title">{{ ccTitle }}</b>
+            <span class="cc-sub">{{ ccSub }}</span>
+          </div>
+          <button v-if="speakState === 'live'" class="cc-btn mic" :class="{ off: !micOn }"
+            @click="toggleMic" :title="micOn ? '点击静音' : '点击开麦'">
+            {{ micOn ? '🎙' : '🔇' }}
+          </button>
+          <button v-if="speakState === 'invited'" class="cc-btn primary" @click="onConnectClick">接受连线</button>
+          <button v-else-if="speakState === 'live'" class="cc-btn danger" @click="onConnectClick">断开</button>
+        </section>
+
       <!-- 公屏聊天 -->
       <aside class="chat-card card">
         <header class="chat-head">
@@ -144,6 +161,7 @@
           <button v-for="e in emojis" :key="e" class="emoji-btn" @click="insertEmoji(e)" :title="'插入 ' + e">{{ e }}</button>
         </div>
       </aside>
+      </div>
     </main>
 
     <!-- ═══ ③ 错误 / 结束页 ═══ -->
@@ -175,9 +193,16 @@ const router = useRouter()
 const videoRef = ref(null)
 const stageRef = ref(null)
 const mainRef = ref(null)
+const areaRef = ref(null)
+const liveRef = ref(null)
 const nativeFs = ref(false)     // 浏览器全屏中
 const immersive = ref(false)    // CSS 沉浸式全屏中（无浏览器全屏能力时）
 const chatScroll = ref(null)
+
+// 桌面/手机两套连线位置：桌面进右栏（公屏上方），手机留在画面正下方
+const isWide = ref(typeof window !== 'undefined' ? window.innerWidth >= 900 : true)
+let wideMq = null
+function onWideChange(e) { isWide.value = e.matches }
 
 // ── 基础状态 ──
 const hasJoined = ref(false)
@@ -225,6 +250,17 @@ const connectSub = computed(() => {
     if (speakState.value === 'live') return '大家都能听到你，点击断开'
     return '等待老师邀请你连线'
 })
+// 桌面连线卡用「状态标题 + 动作按钮」：标题说状态，按钮说动作，不要两处都写「接受连线」
+const ccTitle = computed(() => {
+    if (speakState.value === 'invited') return '老师邀请你连线'
+    if (speakState.value === 'live') return micOn.value ? '连线中' : '已静音'
+    return '未连线'
+})
+const ccSub = computed(() => {
+    if (speakState.value === 'invited') return '接入后大家就能听到你说话'
+    if (speakState.value === 'live') return '大家都能听到你，点「断开」结束'
+    return '老师邀请后，这里会出现按钮'
+})
 
 // ── 工具 ──
 function formatClock(ts) { return new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }
@@ -241,27 +277,41 @@ function insertEmoji(e) {
     chatInput.value += e
 }
 
-// ── 让画面下面的功能框跟播放框一样宽 ──
-// 播放框是 16:9，宽度由容器高宽比算出来，可能比整列窄；下面的连线区、音频条原来铺满
-// 整列，看起来就上下不齐。这里把播放框的真实宽度写进 --stage-w，两块跟着一起走。
-let stageRO = null
-function syncStageWidth() {
-    const stage = stageRef.value, main = mainRef.value
-    if (!stage || !main || !stage.isConnected) return
-    if (immersive.value || nativeFs.value) return   // 全屏时播放框铺满视口，量了没意义
-    const w = Math.round(stage.getBoundingClientRect().width)
-    if (w > 0) main.style.setProperty('--stage-w', w + 'px')
+// ── 主列宽度 = 画面宽度，公屏吃掉所有剩余宽度 ──
+// 画面是 16:9，窗口又宽又扁时会被「高度」卡住、比整列窄，于是画面和公屏之间空出一大块。
+// 这里直接把主列宽度锁成画面宽度，公屏 flex 吃满剩余 → 任何尺寸都没有空隙。
+// 关键：必须按「舞台可用高度」反算，绝不能按「当前画面宽度」迭代，
+// 否则 width 变窄 → 可用高度变小 → 算出来更窄，会一路缩到底（自反馈死循环）。
+let liveRO = null
+function layoutLive() {
+    const live = liveRef.value, area = areaRef.value, main = mainRef.value
+    if (!live || !area || !main || !live.isConnected) return
+    if (immersive.value || nativeFs.value) return       // 全屏时画面铺满视口，不用算
+    if (window.innerWidth < 900) { main.style.width = ''; return }  // 单列布局，交给 CSS
+    const availH = area.clientHeight
+    if (availH < 120) return
+    const cs = getComputedStyle(live)
+    const totalW = live.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+    const gap = 16
+    // 公屏的理想宽度（跟原来的 CSS clamp 一致），画面放得下就按它，放不下再让公屏吃剩余
+    const railIdeal = Math.min(Math.max(window.innerWidth * 0.26, 336), 480)
+    const byHeight = Math.round(availH * 16 / 9)
+    const byWidth = Math.round(totalW - railIdeal - gap)
+    const w = Math.max(320, Math.min(byHeight, byWidth))
+    main.style.width = w + 'px'
 }
-function watchStageWidth() {
-    const stage = stageRef.value
-    if (!stage || typeof ResizeObserver === 'undefined') { syncStageWidth(); return }
-    if (stageRO) stageRO.disconnect()
-    stageRO = new ResizeObserver(syncStageWidth)
-    stageRO.observe(stage)
-    syncStageWidth()
+function watchLiveLayout() {
+    const live = liveRef.value
+    if (!live) return
+    if (typeof ResizeObserver === 'undefined') { layoutLive(); return }
+    if (liveRO) liveRO.disconnect()
+    liveRO = new ResizeObserver(layoutLive)
+    liveRO.observe(live)
+    // 首帧音频条可能先换行再回单行，量两遍就稳了
+    requestAnimationFrame(() => { layoutLive(); requestAnimationFrame(layoutLive) })
 }
-function unwatchStageWidth() {
-    if (stageRO) { stageRO.disconnect(); stageRO = null }
+function unwatchLiveLayout() {
+    if (liveRO) { liveRO.disconnect(); liveRO = null }
 }
 
 // ── 全屏观看 ──
@@ -279,7 +329,7 @@ function setImmersive(on) {
     immersive.value = next
     document.documentElement.classList.toggle('stage-locked', next)
     if (next) lockLandscape()
-    else { unlockOrientation(); resumeVideoSoon(); nextTick(syncStageWidth) }
+    else { unlockOrientation(); resumeVideoSoon(); nextTick(layoutLive) }
 }
 
 async function toggleFullscreen() {
@@ -366,7 +416,7 @@ function onFullscreenChange() {
     nativeFs.value = !!fsElement()
     if (!nativeFs.value) unlockOrientation()
     resumeVideoSoon()   // ← 关键：进出全屏都立刻续播
-    nextTick(syncStageWidth)
+    nextTick(layoutLive)
 }
 function onKeydown(e) {
     if (e.key !== 'Escape') return
@@ -478,7 +528,7 @@ function joinClass() {
     nameError.value = ''
     hasJoined.value = true
     initializeConnection()
-    nextTick(watchStageWidth)
+    nextTick(watchLiveLayout)
 }
 
 function initializeConnection() {
@@ -604,6 +654,9 @@ onMounted(async () => {
     document.addEventListener('webkitfullscreenchange', onFullscreenChange)
     document.addEventListener('visibilitychange', onVisibility)
     document.addEventListener('keydown', onKeydown)
+    wideMq = window.matchMedia('(min-width: 900px)')
+    isWide.value = wideMq.matches
+    wideMq.addEventListener('change', onWideChange)
     await getAudioDevices()
     navigator.mediaDevices.addEventListener('devicechange', getAudioDevices)
 })
@@ -613,10 +666,11 @@ onBeforeUnmount(() => {
     document.removeEventListener('webkitfullscreenchange', onFullscreenChange)
     document.removeEventListener('visibilitychange', onVisibility)
     document.removeEventListener('keydown', onKeydown)
+    if (wideMq) wideMq.removeEventListener('change', onWideChange)
     if (fsElement()) { try { (document.exitFullscreen || document.webkitExitFullscreen).call(document) } catch (e) { } }
     setImmersive(false)
     unlockOrientation()
-    unwatchStageWidth()
+    unwatchLiveLayout()
     disconnectAll()
 })
 </script>
@@ -664,25 +718,28 @@ onBeforeUnmount(() => {
   display: inline-flex; align-items: center; justify-content: center; font-size: .72rem; font-weight: 600;
 }
 
-/* ═══ ② 上课中 ═══ */
+/* ═══ ② 上课中 ═══
+   主列宽度由 JS 锁成「画面宽度」，公屏 flex 吃掉所有剩余宽度 —— 任何窗口尺寸都不会
+   在画面和公屏之间留下空白（画面是 16:9，扁窗口下会被高度卡住而比整列窄）。 */
 .live {
-  flex: 1; display: grid; gap: 1rem; padding: 1rem 1.4rem 1.4rem;
-  /* 公屏跟着屏幕宽度长大：21rem 起步，26vw 最好，30rem 封顶 */
-  grid-template-columns: minmax(0, 1fr) clamp(21rem, 26vw, 30rem);
-  grid-template-rows: minmax(0, 1fr);
+  flex: 1; display: flex; gap: 1rem; padding: 1rem 1.4rem 1.4rem;
   min-height: 0;
 }
 .live-main {
+  flex: 0 0 auto; width: 100%;
   display: flex; flex-direction: column; gap: 1rem;
   min-width: 0; min-height: 0;
-  /* 播放框的真实宽度（JS 写入），下面的功能框跟着它走 */
-  --stage-w: 100%;
+}
+
+/* 右栏：桌面 = 连线卡 + 公屏；手机只放公屏。min-width 保证极窄屏时不被画面挤没 */
+.live-rail {
+  flex: 1 1 auto; min-width: 21rem;
+  display: flex; flex-direction: column; gap: 1rem; min-height: 0;
 }
 
 /* ═══ 画面舞台：固定 16:9 ═══
    老师端采集的教学排版就是 16:9，这里按同样比例开框，画面刚好铺满、不留黑边。
-   用容器查询单位算「能放下的最大 16:9 矩形」，纯 CSS，窗口怎么拉都是 16:9。
-   靠左摆：画面右边留出的空档归公屏，整组（画面 + 下方功能框）因此整体左移。 */
+   用容器查询单位算「能放下的最大 16:9 矩形」，纯 CSS，窗口怎么拉都是 16:9。 */
 .stage-area {
   flex: 1; min-height: 0;
   container-type: size;
@@ -794,15 +851,63 @@ onBeforeUnmount(() => {
 .audio-bar {
   display: flex; align-items: center; gap: 1.2rem; padding: .65rem 1rem;
   flex-shrink: 0; flex-wrap: wrap;
-  width: var(--stage-w);   /* 跟播放框同宽 */
+  width: 100%;   /* 主列宽度已等于画面宽度，这里自然同宽 */
 }
 .audio-group { display: flex; align-items: center; gap: .55rem; min-width: 0; }
 .audio-label { font-size: .82rem; color: var(--text-2); white-space: nowrap; }
 .audio-select { width: 10rem; }
 .vol-bar.sm { width: 4.5rem; flex: none; }
 
+/* ═══ 桌面连线卡（右栏、公屏上方）═══
+   原来那条横在画面下方的大按钮太占地方，这里压成一行：状态点 + 文案 + 一个按钮。 */
+.connect-card {
+  display: flex; align-items: center; gap: .7rem;
+  padding: .72rem .9rem .72rem 1.05rem;
+  /* 必须写死 flex：右栏是 flex 列，默认会跟着公屏一起被拉伸 */
+  flex: 0 0 auto; align-self: stretch;
+  transition: border-color .18s, background .18s;
+}
+.cc-dot {
+  width: .6rem; height: .6rem; border-radius: 50%; flex-shrink: 0;
+  background: var(--text-3); transition: background .18s, box-shadow .18s;
+}
+.cc-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .08rem; }
+.cc-title { font-size: .95rem; font-weight: 600; color: var(--text-2); line-height: 1.3; }
+.cc-sub {
+  font-size: .75rem; color: var(--text-3); line-height: 1.3;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cc-btn {
+  flex-shrink: 0; padding: .4rem .85rem; border-radius: 999px;
+  border: 1px solid var(--line-2); background: var(--panel-2); color: var(--text-2);
+  font-size: .84rem; font-weight: 600; font-family: inherit; cursor: pointer;
+  transition: filter .15s, background .15s, border-color .15s;
+}
+.cc-btn.primary { background: var(--green); border-color: var(--green); color: #06281A; }
+.cc-btn.primary:hover { filter: brightness(1.1); }
+.cc-btn.danger { background: var(--red-soft); border-color: rgba(229,86,94,.45); color: var(--red); }
+.cc-btn.danger:hover { background: rgba(229,86,94,.22); }
+.cc-btn.mic { padding: .4rem .55rem; font-size: 1rem; line-height: 1; }
+.cc-btn.mic.off { background: var(--panel-2); border-color: var(--line-2); }
+
+/* 待接受：绿色呼吸，和原来那个大按钮的语义保持一致 */
+.connect-card.is-invited {
+  border-color: var(--green);
+  background: linear-gradient(135deg, rgba(62,207,142,.2), rgba(62,207,142,.06));
+  animation: breathe 1.6s ease-in-out infinite;
+}
+.connect-card.is-invited .cc-dot { background: var(--green); box-shadow: 0 0 12px var(--green); }
+.connect-card.is-invited .cc-title { color: var(--green); }
+.connect-card.is-invited .cc-sub { color: rgba(62,207,142,.75); }
+
+/* 连线中：绿色描边 + 淡绿底 */
+.connect-card.is-live { border-color: rgba(62,207,142,.5); background: var(--green-soft); }
+.connect-card.is-live .cc-dot { background: var(--green); }
+.connect-card.is-live .cc-title { color: var(--green); }
+.connect-card.is-live .cc-sub { color: rgba(62,207,142,.75); }
+
 /* ═══ 连线按钮（三态）═══ */
-.connect-zone { display: flex; gap: .8rem; flex-shrink: 0; width: var(--stage-w); }
+.connect-zone { display: flex; gap: .8rem; flex-shrink: 0; width: 100%; }
 .connect-btn {
   flex: 1; position: relative; overflow: hidden;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .15rem;
@@ -820,30 +925,30 @@ onBeforeUnmount(() => {
 .connect-btn .connect-sub { font-size: .76rem; color: var(--text-3); }
 
 /* 待接受：绿色 + 呼吸光 */
-.connect-btn.invited {
+.connect-btn.is-invited {
   border-color: var(--green);
   background: linear-gradient(135deg, rgba(62,207,142,.22), rgba(62,207,142,.08));
   animation: breathe 1.6s ease-in-out infinite;
 }
-.connect-btn.invited .connect-dot { background: var(--green); box-shadow: 0 0 12px var(--green); }
-.connect-btn.invited .connect-text { color: var(--green); }
-.connect-btn.invited .connect-sub { color: rgba(62,207,142,.75); }
+.connect-btn.is-invited .connect-dot { background: var(--green); box-shadow: 0 0 12px var(--green); }
+.connect-btn.is-invited .connect-text { color: var(--green); }
+.connect-btn.is-invited .connect-sub { color: rgba(62,207,142,.75); }
 @keyframes breathe {
   0%, 100% { box-shadow: 0 0 0 0 rgba(62,207,142,.35); }
   50% { box-shadow: 0 0 0 8px rgba(62,207,142,0); }
 }
 
 /* 连线中：绿色实底 */
-.connect-btn.live {
+.connect-btn.is-live {
   border-color: var(--green);
   background: linear-gradient(135deg, var(--green) 0%, var(--green-deep) 100%);
 }
-.connect-btn.live .connect-dot { background: #06281A; }
-.connect-btn.live .connect-text { color: #06281A; }
-.connect-btn.live .connect-sub { color: rgba(6,40,26,.7); }
+.connect-btn.is-live .connect-dot { background: #06281A; }
+.connect-btn.is-live .connect-text { color: #06281A; }
+.connect-btn.is-live .connect-sub { color: rgba(6,40,26,.7); }
 
-.connect-btn.idle:hover { border-color: var(--gold-line); }
-.connect-btn.idle:hover .connect-text { color: var(--gold); }
+.connect-btn.is-idle:hover { border-color: var(--gold-line); }
+.connect-btn.is-idle:hover .connect-text { color: var(--gold); }
 
 /* 静音小按钮 */
 .mute-btn {
@@ -856,7 +961,7 @@ onBeforeUnmount(() => {
 .mute-btn.off { border-color: var(--line-2); background: var(--panel-2); color: var(--text-3); }
 
 /* ═══ 公屏 ═══ */
-.chat-card { display: flex; flex-direction: column; min-height: 0; padding: 1.1rem 1.25rem; }
+.chat-card { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 1.1rem 1.25rem; }
 .chat-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .85rem; flex-shrink: 0; }
 .chat-title { font-size: 1.05rem; font-weight: 600; }
 .chat-scroll { flex: 1; overflow-y: auto; min-height: 0; padding: .2rem; }
@@ -892,9 +997,11 @@ onBeforeUnmount(() => {
 
 /* ═══ 响应式：平板（单列，宽度决定画面尺寸）═══ */
 @media (max-width: 899px) {
-  .live { grid-template-columns: 1fr; grid-template-rows: auto; align-content: start; }
+  .live { flex-direction: column; }
+  .live-main { width: 100%; }
   .stage-area { flex: none; display: block; container-type: normal; }
   .video-stage { width: 100%; }
+  .live-rail { min-width: 0; }
   .chat-card { min-height: 20rem; }
   /* 单列时整列等宽，功能框回到 100% */
   .connect-zone, .audio-bar { width: 100%; }

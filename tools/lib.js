@@ -103,13 +103,14 @@ async function measureStage(page) {
     const video = stage && stage.querySelector('video');
     const main = document.querySelector('.live-main');
     const area = document.querySelector('.stage-area');
-    const below = document.querySelector('.connect-zone, .invite-card');
+    const below = document.querySelector('.connect-zone, .audio-strip');
+    const conn = document.querySelector('.connect-card');
     const bar = document.querySelector('.audio-strip, .audio-bar');
     const rail = document.querySelector('.live-rail, .chat-card');
     return {
       vw: window.innerWidth, vh: window.innerHeight,
       stage: box(stage), video: box(video), area: box(area), main: box(main),
-      below: box(below), bar: box(bar), rail: box(rail),
+      below: box(below), bar: box(bar), rail: box(rail), conn: box(conn),
       objectFit: video ? getComputedStyle(video).objectFit : '',
       overflowX: document.documentElement.scrollWidth - window.innerWidth,
       overflowY: document.documentElement.scrollHeight - window.innerHeight,
