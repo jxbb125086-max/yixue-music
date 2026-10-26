@@ -4,12 +4,11 @@ services:
     env: node
     region: singapore
     plan: free
-    buildCommand: npm run build
-    startCommand: npm start
+    buildCommand: npm install && cd frontend && npm install && npm run build && cd .. && cd backend && npm install
+    startCommand: cd backend && node server.js
     healthCheckPath: /api/health
-
-envs:
-  - key: NODE_ENV
-    value: production
-  - key: PORT
-    value: "10000"
+    envs:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
