@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  # 应用服务：Node 信令服务器 + 前端静态文件
+  app:
+    build: .
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - salon
+    # 注意：不映射端口到宿主机，只允许 Caddy 通过内部网络访问
+    # 如需本机直接调试可临时加 ports: - "127.0.0.1:3000:3000"
+
+  # Caddy：自动 HTTPS + 反向代理
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    networks:
+      - salon
+
+networks:
+  salon:
+
+volumes:
+  caddy_data:
+  caddy_config:
