@@ -53,11 +53,11 @@
 
     <!-- ═══ ② 上课中 ═══ -->
     <main v-else-if="!showErrorPage" class="live">
-      <div class="live-main">
-        <!-- 舞台：老师端采集的是 16:9，这里固定 16:9，画面刚好铺满；点画面或右下角按钮进全屏 -->
+      <div class="live-main" ref="mainRef">
+        <!-- 舞台：老师端采集的是 16:9，这里固定 16:9，画面刚好铺满；全屏只走右下角按钮 -->
         <div class="stage-area" :class="{ 'is-immersive': immersive }">
           <div class="video-stage card" ref="stageRef" :class="{ immersive }">
-            <video ref="videoRef" autoplay playsinline @click="toggleFullscreen"></video>
+            <video ref="videoRef" autoplay playsinline></video>
             <div v-if="!connected" class="video-hint"><span class="spinner"></span>正在连接老师的画面…</div>
             <button v-if="needTap" class="resume-btn" @click="resumeVideo">▶ 点击继续播放</button>
             <button v-if="!immersive" class="fs-btn" :class="{ on: nativeFs }" @click="toggleFullscreen"
@@ -107,8 +107,7 @@
         </div>
       </div>
 
-      <!-- 沉浸式全屏时的浮层：退出按钮 + 竖屏提示
-           放在被旋转的画面外面，所以永远是正着的 -->
+      <!-- 沉浸式全屏时的浮层：只有退出按钮，画面之外不放任何东西 -->
       <template v-if="immersive">
         <button class="immersive-exit" @click="toggleFullscreen">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none"
@@ -117,7 +116,6 @@
           </svg>
           <span>退出全屏</span>
         </button>
-        <div class="immersive-hint">↻ 把手机横过来看更清楚</div>
       </template>
 
       <!-- 公屏聊天 -->
@@ -176,6 +174,7 @@ const route = useRoute()
 const router = useRouter()
 const videoRef = ref(null)
 const stageRef = ref(null)
+const mainRef = ref(null)
 const nativeFs = ref(false)     // 浏览器全屏中
 const immersive = ref(false)    // CSS 沉浸式全屏中（无浏览器全屏能力时）
 const chatScroll = ref(null)
@@ -242,6 +241,29 @@ function insertEmoji(e) {
     chatInput.value += e
 }
 
+// ── 让画面下面的功能框跟播放框一样宽 ──
+// 播放框是 16:9，宽度由容器高宽比算出来，可能比整列窄；下面的连线区、音频条原来铺满
+// 整列，看起来就上下不齐。这里把播放框的真实宽度写进 --stage-w，两块跟着一起走。
+let stageRO = null
+function syncStageWidth() {
+    const stage = stageRef.value, main = mainRef.value
+    if (!stage || !main || !stage.isConnected) return
+    if (immersive.value || nativeFs.value) return   // 全屏时播放框铺满视口，量了没意义
+    const w = Math.round(stage.getBoundingClientRect().width)
+    if (w > 0) main.style.setProperty('--stage-w', w + 'px')
+}
+function watchStageWidth() {
+    const stage = stageRef.value
+    if (!stage || typeof ResizeObserver === 'undefined') { syncStageWidth(); return }
+    if (stageRO) stageRO.disconnect()
+    stageRO = new ResizeObserver(syncStageWidth)
+    stageRO.observe(stage)
+    syncStageWidth()
+}
+function unwatchStageWidth() {
+    if (stageRO) { stageRO.disconnect(); stageRO = null }
+}
+
 // ── 全屏观看 ──
 // 两条路：
 //   ① 浏览器全屏（桌面 / Android）—— 能自动横屏，体验最好
@@ -257,7 +279,7 @@ function setImmersive(on) {
     immersive.value = next
     document.documentElement.classList.toggle('stage-locked', next)
     if (next) lockLandscape()
-    else { unlockOrientation(); resumeVideoSoon() }
+    else { unlockOrientation(); resumeVideoSoon(); nextTick(syncStageWidth) }
 }
 
 async function toggleFullscreen() {
@@ -344,6 +366,7 @@ function onFullscreenChange() {
     nativeFs.value = !!fsElement()
     if (!nativeFs.value) unlockOrientation()
     resumeVideoSoon()   // ← 关键：进出全屏都立刻续播
+    nextTick(syncStageWidth)
 }
 function onKeydown(e) {
     if (e.key !== 'Escape') return
@@ -455,6 +478,7 @@ function joinClass() {
     nameError.value = ''
     hasJoined.value = true
     initializeConnection()
+    nextTick(watchStageWidth)
 }
 
 function initializeConnection() {
@@ -592,6 +616,7 @@ onBeforeUnmount(() => {
     if (fsElement()) { try { (document.exitFullscreen || document.webkitExitFullscreen).call(document) } catch (e) { } }
     setImmersive(false)
     unlockOrientation()
+    unwatchStageWidth()
     disconnectAll()
 })
 </script>
@@ -642,19 +667,26 @@ onBeforeUnmount(() => {
 /* ═══ ② 上课中 ═══ */
 .live {
   flex: 1; display: grid; gap: 1rem; padding: 1rem 1.4rem 1.4rem;
-  grid-template-columns: minmax(0, 1fr) 21rem;
+  /* 公屏跟着屏幕宽度长大：21rem 起步，26vw 最好，30rem 封顶 */
+  grid-template-columns: minmax(0, 1fr) clamp(21rem, 26vw, 30rem);
   grid-template-rows: minmax(0, 1fr);
   min-height: 0;
 }
-.live-main { display: flex; flex-direction: column; gap: 1rem; min-width: 0; min-height: 0; }
+.live-main {
+  display: flex; flex-direction: column; gap: 1rem;
+  min-width: 0; min-height: 0;
+  /* 播放框的真实宽度（JS 写入），下面的功能框跟着它走 */
+  --stage-w: 100%;
+}
 
 /* ═══ 画面舞台：固定 16:9 ═══
    老师端采集的教学排版就是 16:9，这里按同样比例开框，画面刚好铺满、不留黑边。
-   用容器查询单位算「能放下的最大 16:9 矩形」，纯 CSS，窗口怎么拉都是 16:9。 */
+   用容器查询单位算「能放下的最大 16:9 矩形」，纯 CSS，窗口怎么拉都是 16:9。
+   靠左摆：画面右边留出的空档归公屏，整组（画面 + 下方功能框）因此整体左移。 */
 .stage-area {
   flex: 1; min-height: 0;
   container-type: size;
-  display: flex; align-items: center; justify-content: center;
+  display: flex; align-items: center; justify-content: flex-start;
 }
 /* 沉浸式时一定要关掉 container-type：它会带上 contain:layout，
    那样 position:fixed 就只相对这个盒子定位，铺不满整个视口。 */
@@ -663,14 +695,14 @@ onBeforeUnmount(() => {
   position: relative;
   width: min(100cqw, calc(100cqh * 16 / 9));
   aspect-ratio: 16 / 9;
-  margin: auto;
+  margin: 0;
   background: #05070A; border-color: #222D3D;
   overflow: hidden; display: block;
 }
 /* cover：源画面正好 16:9 时与 contain 等效；源画面带黑边时把黑边裁掉，绝不出现双重黑边 */
 .video-stage video {
   display: block; width: 100%; height: 100%;
-  object-fit: cover; background: #05070A; cursor: zoom-in;
+  object-fit: cover; background: #05070A;
 }
 .video-hint {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -713,8 +745,13 @@ onBeforeUnmount(() => {
 /* 全屏时画面用 contain —— 宁可两侧留黑边，也不裁掉讲课内容 */
 .video-stage:fullscreen video,
 .video-stage:-webkit-full-screen video,
-.video-stage.immersive video { object-fit: contain; cursor: default; }
+.video-stage.immersive video { object-fit: contain; }
 .video-stage::backdrop { background: #000; }
+
+/* 全屏就是「干净看画面」：连接提示一律收起，只留视频本身和退出按钮 */
+.video-stage:fullscreen .video-hint,
+.video-stage:-webkit-full-screen .video-hint,
+.video-stage.immersive .video-hint { display: none; }
 
 /* 竖着拿手机又没进真全屏（拿不到方向锁定）：把画面转 90°，
    用户把手机横过来就是满屏，不用等系统转屏。只对触屏生效，桌面不动。 */
@@ -726,7 +763,7 @@ onBeforeUnmount(() => {
   }
 }
 
-/* 沉浸式下的浮层（在旋转容器外面，永远正着） */
+/* 沉浸式下的浮层（在旋转容器外面，永远正着）——整个全屏里只有这一个控件 */
 .immersive-exit {
   position: fixed; z-index: 10000;
   top: calc(env(safe-area-inset-top, 0px) + .8rem);
@@ -737,21 +774,11 @@ onBeforeUnmount(() => {
   background: rgba(10,14,20,.86); color: var(--text);
   font-size: .8rem; font-family: inherit; cursor: pointer;
   backdrop-filter: blur(8px);
+  /* 平时淡着不抢眼，碰一下就亮起来 */
+  opacity: .55; transition: opacity .2s, color .15s, border-color .15s;
 }
-.immersive-exit:hover { color: var(--gold); border-color: var(--gold-line); }
-.immersive-hint {
-  display: none;
-  position: fixed; z-index: 10000;
-  top: calc(env(safe-area-inset-top, 0px) + 3.6rem);
-  left: 50%; transform: translateX(-50%);
-  padding: .38rem .9rem; border-radius: 999px;
-  background: rgba(10,14,20,.8); border: 1px solid var(--line-2);
-  color: var(--text-2); font-size: .78rem; white-space: nowrap;
-  pointer-events: none;
-}
-@media (orientation: portrait) {
-  .immersive-hint { display: block; }
-}
+.immersive-exit:hover,
+.immersive-exit:active { opacity: 1; color: var(--gold); border-color: var(--gold-line); }
 
 /* 浏览器把播放拦下来时的兜底：给一个明确可点的按钮，而不是让用户猜 */
 .resume-btn {
@@ -764,14 +791,18 @@ onBeforeUnmount(() => {
 .resume-btn:hover { background: rgba(224,177,94,.18); }
 
 /* 音频设置条 */
-.audio-bar { display: flex; align-items: center; gap: 1.2rem; padding: .65rem 1rem; flex-shrink: 0; flex-wrap: wrap; }
+.audio-bar {
+  display: flex; align-items: center; gap: 1.2rem; padding: .65rem 1rem;
+  flex-shrink: 0; flex-wrap: wrap;
+  width: var(--stage-w);   /* 跟播放框同宽 */
+}
 .audio-group { display: flex; align-items: center; gap: .55rem; min-width: 0; }
 .audio-label { font-size: .82rem; color: var(--text-2); white-space: nowrap; }
 .audio-select { width: 10rem; }
 .vol-bar.sm { width: 4.5rem; flex: none; }
 
 /* ═══ 连线按钮（三态）═══ */
-.connect-zone { display: flex; gap: .8rem; flex-shrink: 0; }
+.connect-zone { display: flex; gap: .8rem; flex-shrink: 0; width: var(--stage-w); }
 .connect-btn {
   flex: 1; position: relative; overflow: hidden;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .15rem;
@@ -825,9 +856,9 @@ onBeforeUnmount(() => {
 .mute-btn.off { border-color: var(--line-2); background: var(--panel-2); color: var(--text-3); }
 
 /* ═══ 公屏 ═══ */
-.chat-card { display: flex; flex-direction: column; min-height: 0; padding: 1rem 1.1rem; }
-.chat-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .8rem; flex-shrink: 0; }
-.chat-title { font-size: 1rem; font-weight: 600; }
+.chat-card { display: flex; flex-direction: column; min-height: 0; padding: 1.1rem 1.25rem; }
+.chat-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .85rem; flex-shrink: 0; }
+.chat-title { font-size: 1.05rem; font-weight: 600; }
 .chat-scroll { flex: 1; overflow-y: auto; min-height: 0; padding: .2rem; }
 .chat-empty { color: var(--text-3); font-size: .85rem; text-align: center; padding: 2rem .5rem; }
 .chat-input-row { display: flex; gap: .5rem; margin-top: .7rem; flex-shrink: 0; }
@@ -865,6 +896,8 @@ onBeforeUnmount(() => {
   .stage-area { flex: none; display: block; container-type: normal; }
   .video-stage { width: 100%; }
   .chat-card { min-height: 20rem; }
+  /* 单列时整列等宽，功能框回到 100% */
+  .connect-zone, .audio-bar { width: 100%; }
 }
 
 /* ═══ 响应式：手机（画面 16:9 打头 → 连线 → 音频 → 公屏）═══

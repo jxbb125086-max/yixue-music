@@ -130,6 +130,18 @@ async function joinStudent(browser, roomId, viewport, opts = {}) {
     ok(fs.objFit === 'contain', `沉浸式用 contain 不裁内容（${fs.objFit}）`);
     ok(fs.exitBtn, '浮出「退出全屏」按钮');
 
+    // 全屏必须是「干净的画面」：不能有「把手机横过来」这类提示
+    ok(!(await s.page.$('.immersive-hint')), '全屏里没有「横过来看」的提示');
+    ok(!(await s.page.$('.fs-btn')), '全屏里没有第二个全屏按钮');
+
+    // ★ 用户报的 bug：手一碰屏幕任意位置就退回竖屏。现在只有「退出全屏」按钮能退。
+    await s.page.touchscreen.tap(Math.round(fs.vw / 2), Math.round(fs.vh / 2));
+    await s.page.waitForTimeout(600);
+    ok((await state(s.page)).immersive, '★ 点画面正中间不会退出全屏');
+    await s.page.touchscreen.tap(20, Math.round(fs.vh / 2));
+    await s.page.waitForTimeout(600);
+    ok((await state(s.page)).immersive, '★ 点画面左侧空白也不会退出全屏');
+
     // 再点一次退出
     await s.page.click('.immersive-exit');
     await s.page.waitForTimeout(1000);
@@ -171,9 +183,37 @@ async function joinStudent(browser, roomId, viewport, opts = {}) {
     await s.ctx.close();
   }
 
+  // ─────────── ④ 老师端全屏也要「干净画面」───────────
+  {
+    await t.page.click('.fs-btn');
+    await t.page.waitForTimeout(800);
+    const st = await t.page.evaluate(() => {
+      const badge = document.querySelector('.live-badge');
+      const hint = document.querySelector('.immersive-hint');
+      return {
+        fs: !!document.fullscreenElement,
+        badge: badge ? getComputedStyle(badge).display : 'none',
+        hint: !!hint,
+      };
+    });
+    ok(st.fs, '老师端进入浏览器全屏');
+    ok(st.badge === 'none', '★ 全屏时「直播中」徽标已收起');
+    ok(!st.hint, '老师端全屏里没有多余提示');
+    await t.page.evaluate(() => (document.exitFullscreen || document.webkitExitFullscreen).call(document));
+    await t.page.waitForTimeout(700);
+    const back = await t.page.evaluate(() => ({
+      fs: !!document.fullscreenElement,
+      badge: getComputedStyle(document.querySelector('.live-badge')).display,
+      stageW: Math.round(document.querySelector('.video-stage').getBoundingClientRect().width),
+      inviteW: Math.round(document.querySelector('.invite-card').getBoundingClientRect().width),
+    }));
+    ok(!back.fs, '老师端退出全屏');
+    ok(back.badge !== 'none', '退出后徽标回来');
+    ok(Math.abs(back.stageW - back.inviteW) <= 2, `★ 退出后链接卡仍与画面同宽（${back.inviteW} vs ${back.stageW}）`);
+  }
+
   const realErr = t.errors.filter(e => !/no mic in test|获取设备失败/.test(e));
   ok(realErr.length === 0, `老师端无 JS 报错${realErr.length ? '：' + realErr[0] : ''}`);
-
   console.log(out.join('\n'));
   console.log(fail ? `\n❌ 失败 ${fail} 项` : '\n✅ 全部通过：全屏进出播放不断、画面不出框、被暂停能自愈');
   await browser.close();

@@ -38,6 +38,15 @@ const MOBILE = [
     // 公屏必须一屏可见（不用滚），且在宽屏时应位于画面右侧
     if (opts.chatRight && m.rail && m.rail.l < m.stage.r - 1) problems.push('公屏没在画面右侧');
     if (opts.chatVisible && m.rail && m.rail.b > m.vh + 1) problems.push(`公屏超出视口 ${m.rail.b - m.vh}px`);
+    // 播放框下面的功能框必须和播放框同宽、左对齐（用户要求「上下一样长」）
+    if (opts.alignBelow && m.stage) {
+      if (m.below && Math.abs(m.below.w - m.stage.w) > 2)
+        problems.push(`下方功能框 ${m.below.w}px ≠ 播放框 ${m.stage.w}px`);
+      if (m.bar && Math.abs(m.bar.w - m.stage.w) > 2)
+        problems.push(`音频条 ${m.bar.w}px ≠ 播放框 ${m.stage.w}px`);
+      if (m.below && Math.abs(m.below.l - m.stage.l) > 2)
+        problems.push(`下方功能框左边 ${m.below.l} ≠ 播放框左边 ${m.stage.l}`);
+    }
 
     const ok = problems.length === 0;
     if (!ok) fail++;
@@ -50,7 +59,7 @@ const MOBILE = [
     const { ctx, page, errors } = await newPage(browser, { width: w, height: h });
     await teacherGoLive(page);
     const m = await measureStage(page);
-    check(`老师 ${name}`, m, { noScrollY: w >= 900 });
+    check(`老师 ${name}`, m, { noScrollY: w >= 900, alignBelow: w >= 900 });
     const real = errors.filter(e => !/no mic in test|获取设备失败/.test(e));
     if (real.length) out.push(`   ⚠ 老师 ${name} 报错: ${real[0]}`);
     await ctx.close();
@@ -61,7 +70,7 @@ const MOBILE = [
     const { ctx, page } = await newPage(browser, { width: w, height: h });
     await studentJoin(page, '999999');
     const m = await measureStage(page);
-    check(`学员 ${name}`, m, { noScrollY: w >= 900, chatRight: w >= 900, chatVisible: true });
+    check(`学员 ${name}`, m, { noScrollY: w >= 900, chatRight: w >= 900, chatVisible: true, alignBelow: w >= 900 });
     await ctx.close();
   }
 
