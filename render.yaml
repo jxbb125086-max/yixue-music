@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: yixue-music
+    env: node
+    region: singapore
+    plan: free
+    buildCommand: cd frontend && npm install && npm run build && cd .. && cd backend && npm install
+    startCommand: cd backend && node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+    healthCheckPath: /api/health
