@@ -495,12 +495,16 @@ function enterPrep() {
 
 async function startClass() {
     try {
+        // 屏幕共享：没选麦克风时共享系统声音（钢琴软件声），选了麦克风就不传屏幕流音频
+        const screenAudio = selectedMic.value ? false : {
+            systemAudio: 'include'
+        }
         stream = await navigator.mediaDevices.getDisplayMedia({
             video: {
                 cursor: 'hidden',
                 frameRate: 15
             },
-            audio: false
+            audio: screenAudio
         })
         streamReady.value = true
         try { micStream = await navigator.mediaDevices.getUserMedia(micConstraints()) }
