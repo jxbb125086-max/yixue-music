@@ -496,8 +496,11 @@ function enterPrep() {
 async function startClass() {
     try {
         stream = await navigator.mediaDevices.getDisplayMedia({
-            video: true,
-            audio: selectedMic.value ? { deviceId: selectedMic.value } : true
+            video: {
+                cursor: 'hidden',
+                frameRate: 15
+            },
+            audio: false
         })
         streamReady.value = true
         try { micStream = await navigator.mediaDevices.getUserMedia(micConstraints()) }
@@ -505,7 +508,7 @@ async function startClass() {
 
         peerStream = new MediaStream([
             ...stream.getVideoTracks(),
-            ...(micStream ? micStream.getAudioTracks() : stream.getAudioTracks())
+            ...(micStream ? micStream.getAudioTracks() : [])
         ])
 
         stage.value = 'live'
@@ -522,9 +525,14 @@ async function startClass() {
             }
         })
 
-        // 屏幕共享被手动停止时，自动停录制
+        // 屏幕共享被手动停止时，自动停录制 + 更新 UI
         stream.getVideoTracks().forEach(t => t.addEventListener('ended', () => {
             if (isRecording.value) stopRecording()
+            streamReady.value = false
+            stage.value = 'prep'
+            isClassStarted.value = false
+            if (classTimer) { clearInterval(classTimer); classTimer = null }
+            ElMessage.warning('屏幕共享已停止')
         }))
 
         // ── 建立信令连接（带老师姓名）──
@@ -555,7 +563,17 @@ async function startClass() {
         })
     } catch (e) {
         console.error('屏幕共享失败', e)
-        ElMessage.error('获取屏幕共享失败')
+        let msg = '获取屏幕共享失败'
+        if (e && e.name === 'NotAllowedError') {
+            msg = '屏幕共享被拒绝。macOS 请在「系统设置 → 隐私与安全性 → 屏幕录制」中勾选当前浏览器，并重启浏览器'
+        } else if (e && e.name === 'NotFoundError') {
+            msg = '没有找到可共享的屏幕或窗口'
+        } else if (e && e.name === 'NotReadableError') {
+            msg = '无法读取屏幕画面，请检查屏幕录制权限'
+        } else if (e && e.message) {
+            msg = '获取屏幕共享失败：' + e.message
+        }
+        ElMessage.error(msg)
     }
 }
 
