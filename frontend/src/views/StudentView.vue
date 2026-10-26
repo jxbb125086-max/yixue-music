@@ -55,13 +55,14 @@
     <main v-else-if="!showErrorPage" class="live">
       <div class="live-main">
         <!-- 舞台：老师端采集的是 16:9，这里固定 16:9，画面刚好铺满；点画面或右下角按钮进全屏 -->
-        <div class="stage-area">
-          <div class="video-stage card" ref="stageRef">
+        <div class="stage-area" :class="{ 'is-immersive': immersive }">
+          <div class="video-stage card" ref="stageRef" :class="{ immersive }">
             <video ref="videoRef" autoplay playsinline @click="toggleFullscreen"></video>
             <div v-if="!connected" class="video-hint"><span class="spinner"></span>正在连接老师的画面…</div>
-            <button class="fs-btn" :class="{ on: isFullscreen }" @click="toggleFullscreen"
-              :title="isFullscreen ? '退出全屏（Esc）' : '全屏观看'">
-              <svg v-if="!isFullscreen" viewBox="0 0 24 24" width="16" height="16" fill="none"
+            <button v-if="needTap" class="resume-btn" @click="resumeVideo">▶ 点击继续播放</button>
+            <button v-if="!immersive" class="fs-btn" :class="{ on: nativeFs }" @click="toggleFullscreen"
+              :title="nativeFs ? '退出全屏（Esc）' : '全屏观看'">
+              <svg v-if="!nativeFs" viewBox="0 0 24 24" width="16" height="16" fill="none"
                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M9 4H4v5M15 4h5v5M15 20h5v-5M9 20H4v-5" />
               </svg>
@@ -69,7 +70,7 @@
                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M4 9h5V4M20 9h-5V4M20 15h-5v5M4 15h5v5" />
               </svg>
-              <span>{{ isFullscreen ? '退出全屏' : '全屏' }}</span>
+              <span>{{ nativeFs ? '退出全屏' : '全屏' }}</span>
             </button>
           </div>
         </div>
@@ -105,6 +106,19 @@
           </div>
         </div>
       </div>
+
+      <!-- 沉浸式全屏时的浮层：退出按钮 + 竖屏提示
+           放在被旋转的画面外面，所以永远是正着的 -->
+      <template v-if="immersive">
+        <button class="immersive-exit" @click="toggleFullscreen">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 9h5V4M20 9h-5V4M20 15h-5v5M4 15h5v5" />
+          </svg>
+          <span>退出全屏</span>
+        </button>
+        <div class="immersive-hint">↻ 把手机横过来看更清楚</div>
+      </template>
 
       <!-- 公屏聊天 -->
       <aside class="chat-card card">
@@ -162,7 +176,8 @@ const route = useRoute()
 const router = useRouter()
 const videoRef = ref(null)
 const stageRef = ref(null)
-const isFullscreen = ref(false)
+const nativeFs = ref(false)     // 浏览器全屏中
+const immersive = ref(false)    // CSS 沉浸式全屏中（无浏览器全屏能力时）
 const chatScroll = ref(null)
 
 // ── 基础状态 ──
@@ -194,6 +209,7 @@ const micVolume = ref(0)
 let socket = null
 let socketClosed = false
 let peer = null
+let lastStream = null      // 记住直播流：万一浏览器把它从 video 上摘掉，能立刻接回去
 let micStream = null       // 自己的麦克风流（连线时推给老师）
 let pendingAddStream = false // peer 未就绪时接受连线，就绪后补推
 let audioContext = null, analyser = null, volumeInterval = null
@@ -227,13 +243,27 @@ function insertEmoji(e) {
 }
 
 // ── 全屏观看 ──
-// 手机上「点画面」就横屏铺满看讲课；退出全屏回到正常排版，继续打字看公屏。
-// 优先元素全屏（能保留退出按钮），iPhone Safari 不支持元素全屏，退回 <video> 原生全屏。
+// 两条路：
+//   ① 浏览器全屏（桌面 / Android）—— 能自动横屏，体验最好
+//   ② CSS 沉浸式（iPhone Safari、微信内置浏览器等不支持元素全屏的）——
+//      纯 CSS 把画面铺满视口，完全不碰浏览器全屏，视频绝不会被系统播放器接管
+// 注意：**绝不能再用 video.webkitEnterFullscreen()**，那会把 <video> 交给系统播放器，
+// 退出后视频被暂停、还可能被搬离播放框，只能手动点播放才能恢复。
 function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null }
+
+function setImmersive(on) {
+    const next = !!on
+    if (immersive.value === next) return
+    immersive.value = next
+    document.documentElement.classList.toggle('stage-locked', next)
+    if (next) lockLandscape()
+    else { unlockOrientation(); resumeVideoSoon() }
+}
 
 async function toggleFullscreen() {
     const el = stageRef.value
     if (!el) return
+    // 已经在全屏（任一种）→ 退出
     if (fsElement()) {
         try {
             const exit = document.exitFullscreen || document.webkitExitFullscreen
@@ -241,23 +271,20 @@ async function toggleFullscreen() {
         } catch (e) { /* 忽略 */ }
         return
     }
+    if (immersive.value) { setImmersive(false); return }
+
     if (el.requestFullscreen || el.webkitRequestFullscreen) {
         try {
             if (el.requestFullscreen) await el.requestFullscreen({ navigationUI: 'hide' })
             else await el.webkitRequestFullscreen()
             lockLandscape()
-        } catch (e) {
-            ElMessage.warning('浏览器不允许全屏')
-        }
-        return
+            resumeVideoSoon()
+            return
+        } catch (e) { /* 被拒 → 退回 CSS 沉浸式 */ }
     }
-    const v = videoRef.value
-    if (v && v.webkitEnterFullscreen) {
-        try { v.webkitEnterFullscreen() } catch (e) { ElMessage.warning('当前浏览器不支持全屏') }
-    } else {
-        ElMessage.warning('当前浏览器不支持全屏')
-    }
+    setImmersive(true)
 }
+
 function lockLandscape() {
     try {
         const o = screen.orientation
@@ -270,10 +297,57 @@ function unlockOrientation() {
         if (o && typeof o.unlock === 'function') o.unlock()
     } catch (e) { /* 忽略 */ }
 }
+
+// ── 播放守卫（本次修复的核心）──
+// 浏览器在进出全屏、切后台回来时会把 <video> 暂停，而我们原来从不续播，
+// 于是退出全屏后画面黑掉、要手点播放；再进全屏还是暂停态，看着就像「卡住」。
+// 现在：只要「应该正在播」就自动续播，被拒就弹一个可点的续播浮层。
+const wantsPlay = ref(false)
+const needTap = ref(false)
+let playFails = 0
+
+function resumeVideo() {
+    const v = videoRef.value
+    if (!v || !wantsPlay.value) return
+    if (!v.srcObject && lastStream) v.srcObject = lastStream
+    if (!v.paused) return
+    const p = v.play()
+    if (p && p.catch) {
+        p.then(() => { playFails = 0; needTap.value = false })
+            .catch(() => {
+                // 被自动播放策略拦下：给一个明确可点的按钮，而不是让用户猜
+                if (++playFails >= 3) needTap.value = true
+            })
+    }
+}
+// 全屏切换后浏览器可能「过一会儿」才暂停，多补几次
+function resumeVideoSoon(times = 5) {
+    let n = 0
+    const tick = () => { resumeVideo(); if (++n < times) setTimeout(tick, 160) }
+    tick()
+}
+function onVideoPause() {
+    if (!wantsPlay.value || document.hidden) return
+    setTimeout(resumeVideo, 80)
+}
+function onVideoPlaying() { playFails = 0; needTap.value = false }
+// 绑定一次即可：<video> 被浏览器暂停 / 恢复播放时都能收到
+function bindVideoGuards() {
+    const v = videoRef.value
+    if (!v || v.dataset.guard === '1') return
+    v.dataset.guard = '1'
+    v.addEventListener('pause', onVideoPause)
+    v.addEventListener('playing', onVideoPlaying)
+}
+function onVisibility() { if (!document.hidden) resumeVideoSoon() }
 function onFullscreenChange() {
-    const on = !!fsElement()
-    isFullscreen.value = on
-    if (!on) unlockOrientation()
+    nativeFs.value = !!fsElement()
+    if (!nativeFs.value) unlockOrientation()
+    resumeVideoSoon()   // ← 关键：进出全屏都立刻续播
+}
+function onKeydown(e) {
+    if (e.key !== 'Escape') return
+    if (immersive.value) setImmersive(false)
 }
 
 // ── 连线交互 ──
@@ -446,11 +520,15 @@ function initializeConnection() {
                 peer = new SimplePeer({ initiator: false, trickle: false, objectMode: true, sdpTransform: s => s })
                 peer.on('signal', data => socket.emit('signal', { to: from, from: socket.id, signal: data }))
                 peer.on('stream', s => {
+                    lastStream = s
+                    wantsPlay.value = true
                     if (videoRef.value) {
                         videoRef.value.srcObject = s
                         connected.value = true
+                        bindVideoGuards()
                         if (selectedSpeaker.value && typeof videoRef.value.setSinkId === 'function')
                             videoRef.value.setSinkId(selectedSpeaker.value).catch(() => { })
+                        resumeVideoSoon()
                     }
                 })
                 peer.on('error', err => console.error('Peer error', err))
@@ -500,6 +578,8 @@ watch(() => chatMessages.value.length, () => {
 onMounted(async () => {
     document.addEventListener('fullscreenchange', onFullscreenChange)
     document.addEventListener('webkitfullscreenchange', onFullscreenChange)
+    document.addEventListener('visibilitychange', onVisibility)
+    document.addEventListener('keydown', onKeydown)
     await getAudioDevices()
     navigator.mediaDevices.addEventListener('devicechange', getAudioDevices)
 })
@@ -507,7 +587,10 @@ onBeforeUnmount(() => {
     socketClosed = true
     document.removeEventListener('fullscreenchange', onFullscreenChange)
     document.removeEventListener('webkitfullscreenchange', onFullscreenChange)
+    document.removeEventListener('visibilitychange', onVisibility)
+    document.removeEventListener('keydown', onKeydown)
     if (fsElement()) { try { (document.exitFullscreen || document.webkitExitFullscreen).call(document) } catch (e) { } }
+    setImmersive(false)
     unlockOrientation()
     disconnectAll()
 })
@@ -573,6 +656,9 @@ onBeforeUnmount(() => {
   container-type: size;
   display: flex; align-items: center; justify-content: center;
 }
+/* 沉浸式时一定要关掉 container-type：它会带上 contain:layout，
+   那样 position:fixed 就只相对这个盒子定位，铺不满整个视口。 */
+.stage-area.is-immersive { container-type: normal; }
 .video-stage {
   position: relative;
   width: min(100cqw, calc(100cqh * 16 / 9));
@@ -609,29 +695,73 @@ onBeforeUnmount(() => {
 .fs-btn:hover { color: var(--gold); border-color: var(--gold-line); background: rgba(10,14,20,.92); }
 .fs-btn.on { color: var(--gold); border-color: var(--gold-line); }
 
-/* 全屏时铺满屏幕；画面用 contain —— 宁可两侧留黑边，也不裁掉讲课内容 */
+/* 全屏：两种模式共用「铺满视口」的样式
+   ① 浏览器全屏 → :fullscreen  ② CSS 沉浸式 → .immersive（iPhone / 应用内浏览器） */
 .video-stage:fullscreen,
-.video-stage:-webkit-full-screen {
-  width: 100vw; height: 100vh; aspect-ratio: auto;
-  margin: 0; border: 0; border-radius: 0; background: #000;
+.video-stage:-webkit-full-screen,
+.video-stage.immersive {
+  position: fixed;
+  left: 50%; top: 50%;
+  width: 100vw; height: 100vh;
+  max-width: none; max-height: none;
+  aspect-ratio: auto;
+  margin: 0; border: 0; border-radius: 0;
+  background: #000;
+  z-index: 9998;
+  transform: translate(-50%, -50%);
 }
+/* 全屏时画面用 contain —— 宁可两侧留黑边，也不裁掉讲课内容 */
 .video-stage:fullscreen video,
-.video-stage:-webkit-full-screen video { object-fit: contain; cursor: default; }
-.video-stage:fullscreen .fs-btn,
-.video-stage:-webkit-full-screen .fs-btn { right: 1rem; bottom: 1rem; }
+.video-stage:-webkit-full-screen video,
+.video-stage.immersive video { object-fit: contain; cursor: default; }
 .video-stage::backdrop { background: #000; }
-/* 全屏了但手机没转成横屏（部分浏览器不支持方向锁定）→ 提示横过来看 */
+
+/* 竖着拿手机又没进真全屏（拿不到方向锁定）：把画面转 90°，
+   用户把手机横过来就是满屏，不用等系统转屏。只对触屏生效，桌面不动。 */
 @media (orientation: portrait) {
-  .video-stage:fullscreen::after,
-  .video-stage:-webkit-full-screen::after {
-    content: '↻ 把手机横过来看更清楚';
-    position: absolute; top: 1rem; left: 50%; transform: translateX(-50%);
-    padding: .4rem .9rem; border-radius: 999px;
-    background: rgba(10,14,20,.8); border: 1px solid var(--line-2);
-    color: var(--text-2); font-size: .8rem; white-space: nowrap;
-    pointer-events: none;
+  html.is-touch .video-stage.immersive {
+    width: 100vh; height: 100vw;
+    width: 100dvh; height: 100dvw;
+    transform: translate(-50%, -50%) rotate(90deg);
   }
 }
+
+/* 沉浸式下的浮层（在旋转容器外面，永远正着） */
+.immersive-exit {
+  position: fixed; z-index: 10000;
+  top: calc(env(safe-area-inset-top, 0px) + .8rem);
+  right: calc(env(safe-area-inset-right, 0px) + .8rem);
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .46rem .9rem .46rem .7rem;
+  border-radius: 999px; border: 1px solid var(--line-2);
+  background: rgba(10,14,20,.86); color: var(--text);
+  font-size: .8rem; font-family: inherit; cursor: pointer;
+  backdrop-filter: blur(8px);
+}
+.immersive-exit:hover { color: var(--gold); border-color: var(--gold-line); }
+.immersive-hint {
+  display: none;
+  position: fixed; z-index: 10000;
+  top: calc(env(safe-area-inset-top, 0px) + 3.6rem);
+  left: 50%; transform: translateX(-50%);
+  padding: .38rem .9rem; border-radius: 999px;
+  background: rgba(10,14,20,.8); border: 1px solid var(--line-2);
+  color: var(--text-2); font-size: .78rem; white-space: nowrap;
+  pointer-events: none;
+}
+@media (orientation: portrait) {
+  .immersive-hint { display: block; }
+}
+
+/* 浏览器把播放拦下来时的兜底：给一个明确可点的按钮，而不是让用户猜 */
+.resume-btn {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  z-index: 6; padding: .7rem 1.3rem; border-radius: 999px;
+  border: 1px solid var(--gold-line); background: rgba(10,14,20,.86);
+  color: var(--gold); font-size: .95rem; font-weight: 600;
+  font-family: inherit; cursor: pointer; backdrop-filter: blur(8px);
+}
+.resume-btn:hover { background: rgba(224,177,94,.18); }
 
 /* 音频设置条 */
 .audio-bar { display: flex; align-items: center; gap: 1.2rem; padding: .65rem 1rem; flex-shrink: 0; flex-wrap: wrap; }

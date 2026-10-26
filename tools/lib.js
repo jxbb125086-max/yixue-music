@@ -32,14 +32,36 @@ const FAKE_CAPTURE = () => {
   }
 };
 
-async function newPage(browser, viewport) {
-  const ctx = await browser.newContext({ viewport, permissions: [] });
+async function newPage(browser, viewport, opts = {}) {
+  const ctx = await browser.newContext({ viewport, permissions: [], ...opts });
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
   page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
-  await page.addInitScript(FAKE_CAPTURE);
+  if (!opts.noFakeCapture) await page.addInitScript(FAKE_CAPTURE);
   return { ctx, page, errors };
+}
+
+// 模拟 iPhone Safari：没有元素全屏 API，只能走 CSS 沉浸式
+const KILL_ELEMENT_FS = () => {
+  try {
+    delete Element.prototype.requestFullscreen;
+    delete Element.prototype.webkitRequestFullscreen;
+    Object.defineProperty(Element.prototype, 'requestFullscreen', { value: undefined, configurable: true });
+  } catch (e) { }
+};
+
+// 等学员端真的收到画面
+async function waitVideo(page, tries = 40) {
+  for (let i = 0; i < tries; i++) {
+    const ok = await page.evaluate(() => {
+      const v = document.querySelector('.video-stage video');
+      return !!(v && v.videoWidth > 0);
+    });
+    if (ok) return true;
+    await page.waitForTimeout(250);
+  }
+  return false;
 }
 
 // 老师端：输入姓名 → 进入 → 开始上课
@@ -99,4 +121,7 @@ function ratioOk(m, tol = 0.02) {
   return Math.abs(m.stage.ratio - 16 / 9) <= tol;
 }
 
-module.exports = { chromium, BASE, FAKE_CAPTURE, newPage, teacherGoLive, studentJoin, measureStage, ratioOk };
+module.exports = {
+  chromium, BASE, FAKE_CAPTURE, KILL_ELEMENT_FS,
+  newPage, teacherGoLive, studentJoin, waitVideo, measureStage, ratioOk,
+};
