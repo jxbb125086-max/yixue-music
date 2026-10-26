@@ -18,7 +18,7 @@ function ok(cond, msg) { if (!cond) fail++; out.push(`${cond ? '✅' : '❌'} ${
 
   // 学员加入
   const s = await newPage(browser, { width: 1440, height: 900 });
-  await s.page.goto(BASE + '/student/' + roomId);
+  await s.page.goto(BASE + '/student/' + roomId, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await s.page.waitForTimeout(400);
   await s.page.fill('input[placeholder="例如：王小明"]', '测试学员');
   await s.page.click('text=进入沙龙');

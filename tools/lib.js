@@ -44,7 +44,7 @@ async function newPage(browser, viewport) {
 
 // 老师端：输入姓名 → 进入 → 开始上课
 async function teacherGoLive(page) {
-  await page.goto(BASE + '/');
+  await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForTimeout(400);
   await page.fill('input[placeholder="例如：李老师"]', '测试老师');
   await page.click('text=进入沙龙');
@@ -56,7 +56,7 @@ async function teacherGoLive(page) {
 
 // 学员端：输入姓名 → 进入
 async function studentJoin(page, roomId) {
-  await page.goto(BASE + '/student/' + roomId);
+  await page.goto(BASE + '/student/' + roomId, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForTimeout(400);
   await page.fill('input[placeholder="例如：王小明"]', '测试学员');
   await page.click('text=进入沙龙');
