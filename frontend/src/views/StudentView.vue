@@ -88,9 +88,12 @@
           <button v-if="speakState === 'live'" class="mute-btn cam" :class="{ off: !camOn }" @click="toggleCam">
             {{ camOn ? '📷 摄像头开' : '📷 开摄像头' }}
           </button>
+          <button v-if="speakState === 'live' && camOn" class="mute-btn cam switch" @click="switchCam" title="切换前后摄像头">
+            🔄 切换镜头
+          </button>
         </div>
 
-        <!-- 摄像头本地预览：连线中且开了摄像头才显示（放在画面下方，桌面手机都能看到） -->
+        <!-- 摄像头本地预览 -->
         <div v-if="camOn" class="cam-preview card">
           <video ref="camPreview" autoplay muted playsinline></video>
           <span class="cam-preview-label">📷 我（对方看到的画面）</span>
@@ -142,6 +145,10 @@
           <button v-if="speakState === 'live'" class="cc-btn cam" :class="{ off: !camOn }"
             @click="toggleCam" :title="camOn ? '关闭摄像头' : '开启摄像头'">
             {{ camOn ? '📷' : '📷' }}
+          </button>
+          <button v-if="speakState === 'live' && camOn" class="cc-btn cam switch"
+            @click="switchCam" :title="camFacing === 'user' ? '切换到后置' : '切换到前置'">
+            🔄
           </button>
           <button v-if="speakState === 'invited'" class="cc-btn primary" @click="onConnectClick">接受连线</button>
           <button v-else-if="speakState === 'live'" class="cc-btn danger" @click="onConnectClick">断开</button>
@@ -232,6 +239,7 @@ const micOn = ref(false)
 
 // ── 摄像头（学员端视频连线）：连线中可开/关摄像头，上行给老师 ──
 const camOn = ref(false)
+const camFacing = ref('user') // 'user' 前置 / 'environment' 后置
 let camStream = null        // 摄像头独立流（含视频轨）
 const camPreview = ref(null) // 本地预览 <video>
 
@@ -475,7 +483,7 @@ async function toggleCam() {
     if (camOn.value) { stopCam(); return }
     try {
         camStream = await navigator.mediaDevices.getUserMedia({
-            video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
+            video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: camFacing.value }
         })
         camOn.value = true
         // 本地预览要等 DOM 渲染出来再接流
@@ -487,6 +495,30 @@ async function toggleCam() {
     } catch (e) {
         console.error('开启摄像头失败', e)
         ElMessage.error('无法开启摄像头：' + (e.message || e))
+    }
+}
+// 切换前后摄像头（连线中可切换）
+async function switchCam() {
+    if (!camOn.value) return
+    camFacing.value = camFacing.value === 'user' ? 'environment' : 'user'
+    // 关旧流，开新流
+    const oldStream = camStream
+    camStream = null
+    try {
+        camStream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: camFacing.value }
+        })
+        await nextTick()
+        if (camPreview.value) { camPreview.value.srcObject = camStream; camPreview.value.play().catch(() => { }) }
+        // 替换上行视频轨
+        removeCamTrackFromPeer()
+        await nextTick()
+        addCamTrackToPeer()
+        ElMessage.success(camFacing.value === 'user' ? '📷 切换到前置摄像头' : '📷 切换到后置摄像头')
+    } catch (e) {
+        console.error('切换摄像头失败', e)
+        camStream = oldStream // 恢复旧流
+        ElMessage.error('切换摄像头失败')
     }
 }
 function stopCam() {
@@ -972,6 +1004,8 @@ onBeforeUnmount(() => {
 .cc-btn.cam { padding: .4rem .55rem; font-size: 1rem; line-height: 1; border-color: rgba(168,120,255,.5); background: rgba(168,120,255,.12); }
 .cc-btn.cam:hover { filter: brightness(1.15); }
 .cc-btn.cam.off { background: var(--panel-2); border-color: var(--line-2); }
+.cc-btn.cam.switch { border-color: rgba(255,255,255,.3); background: rgba(255,255,255,.08); color: #fff; }
+.cc-btn.cam.switch:hover { filter: brightness(1.2); background: rgba(255,255,255,.15); }
 
 /* 待接受：绿色呼吸，和原来那个大按钮的语义保持一致 */
 .connect-card.is-invited {
@@ -1047,6 +1081,9 @@ onBeforeUnmount(() => {
 .mute-btn.cam { border-color: rgba(168,120,255,.45); background: rgba(168,120,255,.12); color: #B88AF6; }
 .mute-btn.cam:hover { filter: brightness(1.12); }
 .mute-btn.cam.off { border-color: var(--line-2); background: var(--panel-2); color: var(--text-3); }
+/* 切换镜头按钮 */
+.mute-btn.cam.switch { border-color: rgba(255,255,255,.3); background: rgba(255,255,255,.08); color: #fff; }
+.mute-btn.cam.switch:hover { filter: brightness(1.2); background: rgba(255,255,255,.15); }
 
 /* 摄像头本地预览：连线中开了摄像头才出现，放在画面下方（主列内），桌面手机都能看见 */
 .cam-preview {

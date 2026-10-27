@@ -217,19 +217,6 @@
           <p class="rail-hint">点「邀请连线」后，学员端的连线按钮会变绿，TA 点击即接入声音，公屏也会播报</p>
         </section>
 
-        <!-- 学员摄像头画面窗（公屏上方，按学员逐个显示）
-             注意：用 v-show 而非 v-if，确保 video 元素始终在DOM中，
-             这样 showStudentCam() 能在 stream 到达时立即找到 ref -->
-        <div v-for="u in students" :key="'cam-' + u.id" class="card cam-rail-item" v-show="u.camOn">
-          <header class="rail-head">
-            <span class="rail-title">📷 {{ u.name }}</span>
-            <span class="chip">摄像头</span>
-          </header>
-          <div class="cam-rail-body">
-            <video ref="el => setStudentCamRef(u.id, el)" autoplay playsinline muted class="cam-rail-video"></video>
-          </div>
-        </div>
-
         <!-- 公屏聊天 -->
         <section class="card rail-card chat-card">
           <header class="rail-head">
@@ -283,9 +270,6 @@ const useCamSource = ref(false)
 const camSourceOn = ref(false)   // 摄像头源是否正在采集
 const camSourcePreview = ref(null) // 本地预览 <video>
 let camSourceStream = null       // 摄像头源流
-// 老师端自己收到的学生摄像头画面（video refs 池，按 studentId 存）
-const studentCamRefs = {}        // studentId → HTMLVideoElement
-const studentCamNames = {}       // studentId → name（显示名字）
 
 const videoRef = ref(null)
 const stageRef = ref(null)
@@ -730,36 +714,6 @@ function stopCamSource() {
     if (camSourcePreview.value) camSourcePreview.value.srcObject = null
 }
 
-// 学员摄像头画面（显示在公屏上方的小窗口，随 stream 到达自动挂载）
-function setStudentCamRef(id, el) {
-    if (el) {
-        studentCamRefs[id] = el
-        const s = studentStreams[id]
-        if (s) {
-            const vt = s.getVideoTracks()[0]
-            if (vt) {
-                el.srcObject = new MediaStream([vt])
-                el.play().catch(() => { })
-            }
-        }
-    } else {
-        delete studentCamRefs[id]
-    }
-}
-function showStudentCam(id, stream) {
-    const vt = stream.getVideoTracks()[0]
-    if (!vt) return
-    const el = studentCamRefs[id]
-    if (el) {
-        el.srcObject = new MediaStream([vt])
-        el.play().catch(() => { })
-    }
-}
-function hideStudentCam(id) {
-    const el = studentCamRefs[id]
-    if (el) { el.srcObject = null }
-}
-
 // ── 流程 ──
 function enterPrep() {
     const name = teacherNameInput.value.trim()
@@ -913,14 +867,9 @@ function setupListeners() {
                 const u = onlineUsers.value.find(u => u.id === id)
                 if (u?.micOn) playStudentAudio(id)
             }
-            // 上行视频（摄像头）→ 显示在公屏上方
-            if (s.getVideoTracks().length) {
-                studentCamNames[id] = name
-                showStudentCam(id, s)
-            }
         })
         peer.on('error', err => console.error('Peer error', err))
-        peer.on('close', () => { stopStudentAudio(id); hideStudentCam(id); delete peers[id] })
+        peer.on('close', () => { stopStudentAudio(id); delete peers[id] })
         peers[id] = peer
     })
 
@@ -929,7 +878,6 @@ function setupListeners() {
         if (!peerStream) return
         if (peers[studentId]) { try { peers[studentId].destroy() } catch (e) { } }
         stopStudentAudio(studentId)
-        hideStudentCam(studentId)
         const peer = new SimplePeer({
             initiator: true, trickle: false, stream: peerStream, objectMode: true, sdpTransform: s => s
         })
@@ -940,10 +888,9 @@ function setupListeners() {
                 const u = onlineUsers.value.find(u => u.id === studentId)
                 if (u?.micOn) playStudentAudio(studentId)
             }
-            if (s.getVideoTracks().length) showStudentCam(studentId, s)
         })
         peer.on('error', err => console.error('Peer error', err))
-        peer.on('close', () => { stopStudentAudio(studentId); hideStudentCam(studentId); delete peers[studentId] })
+        peer.on('close', () => { stopStudentAudio(studentId); delete peers[studentId] })
         peers[studentId] = peer
     })
 
@@ -961,20 +908,22 @@ function setupListeners() {
                     if (s.getAudioTracks().length) {
                         if (u.micOn) playStudentAudio(u.id)
                     }
-                    if (s.getVideoTracks().length) showStudentCam(u.id, s)
                 })
                 peer.on('error', err => console.error('Peer error', err))
-                peer.on('close', () => { stopStudentAudio(u.id); hideStudentCam(u.id); delete peers[u.id] })
+                peer.on('close', () => { stopStudentAudio(u.id); delete peers[u.id] })
                 peers[u.id] = peer
             }
         })
     })
 
-    // 学员摄像头开关（来自 user-cam-update 事件）
-    socket.on('user-cam-update', ({ id, camOn }) => {
+    // 学员麦克风状态
+    socket.on('user-mic-update', ({ id, micOn: m }) => {
         const u = onlineUsers.value.find(x => x.id === id)
-        if (u) u.camOn = camOn
-        if (!camOn) hideStudentCam(id)
+        if (u) u.micOn = m
+    })
+
+    socket.on('kicked', ({ teacherName: tn }) => {
+        ElMessage.error(`您已被老师 ${tn || '老师'} 请出沙龙`)
     })
 }
 
@@ -986,8 +935,6 @@ function endClass() {
             if (currentRoomId.value && socket) socket.emit('end-class', currentRoomId.value)
             Object.values(peers).forEach(p => { try { p.destroy() } catch (e) { } })
             Object.keys(studentAudios).forEach(stopStudentAudio)
-            // 清理学员摄像头预览
-            Object.keys(studentCamRefs).forEach(k => { delete studentCamRefs[k] })
             peers = {}
             if (stream) stream.getTracks().forEach(t => t.stop())
             if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null }
@@ -1315,17 +1262,6 @@ onBeforeUnmount(() => {
 .cam-source-preview { margin-top: .8rem; border-radius: var(--r-md); overflow: hidden; border: 1px solid rgba(168,120,255,.4); }
 .cam-source-preview video { display: block; width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #05070A; }
 
-/* 学员摄像头画面窗（公屏上方） */
-.cam-rail-item { padding: .85rem 1.1rem; }
-.cam-rail-item .rail-head { margin-bottom: .55rem; }
-.cam-rail-body {
-  width: 100%; aspect-ratio: 16/9; background: #05070A;
-  border-radius: var(--r-md); overflow: hidden; border: 1px solid rgba(168,120,255,.4);
-}
-.cam-rail-video { display: block; width: 100%; height: 100%; object-fit: cover; background: #05070A; }
-
-/* 学员头像带摄像头状态 */
-.avatar.cam { background: rgba(168,120,255,.18); color: #B88AF6; box-shadow: 0 0 0 1.5px rgba(168,120,255,.5); }
 .chat-scroll { flex: 1; overflow-y: auto; min-height: 0; padding: .2rem; -webkit-overflow-scrolling: touch; }
 .chat-empty { color: var(--text-3); font-size: .85rem; text-align: center; padding: 2rem .5rem; }
 .chat-input-row { display: flex; gap: .5rem; margin-top: .8rem; flex-shrink: 0; align-items: center; }
