@@ -94,8 +94,26 @@
           </div>
         </div>
 
+        <!-- 移动端老师：没有屏幕共享，用摄像头作为视频源 -->
+        <div v-if="mobileTeacher" class="field">
+          <div class="field-label">📷 视频源 <span class="field-tip">移动端用摄像头代替屏幕共享</span></div>
+          <div class="mode-cards">
+            <div class="mode-card" :class="{ active: !camSourceOn }" @click="!camSourceOn && startCamSource()">
+              <b>开启摄像头源</b>
+              <span>用后置摄像头作为画面，学员可看到你</span>
+            </div>
+            <div class="mode-card" :class="{ active: camSourceOn }" @click="camSourceOn && stopCamSource()">
+              <b>关闭摄像头源</b>
+              <span>停止向学员传输画面</span>
+            </div>
+          </div>
+          <div v-if="camSourceOn" class="cam-source-preview">
+            <video ref="camSourcePreview" autoplay playsinline muted></video>
+          </div>
+        </div>
+
         <el-button class="btn-primary start-btn" size="large" @click="startClass">开始上课</el-button>
-        <p class="prep-tip">💡 想让学生听到电脑里钢琴软件的声音？安装 BlackHole 虚拟声卡后，在「麦克风」里选它即可。</p>
+        <p class="prep-tip">💡 桌面端：共享屏幕（教学排版台）；移动端：开启摄像头作为视频源</p>
       </div>
     </main>
 
@@ -126,12 +144,11 @@
 
         <!-- 沉浸式全屏时的浮层（在旋转容器外面，永远正着）——只有退出按钮，画面之外不放任何东西 -->
         <template v-if="immersive">
-          <button class="immersive-exit" @click="toggleFullscreen">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none"
-              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M4 9h5V4M20 9h-5V4M20 15h-5v5M4 15h5v5" />
+          <button class="immersive-exit" @click="toggleFullscreen" title="退出全屏">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 6l12 12M18 6L6 18" />
             </svg>
-            <span>退出全屏</span>
           </button>
         </template>
 
@@ -175,14 +192,15 @@
             还没有学员加入<br/>把顶栏的学生链接发给学员即可
           </div>
           <div class="student-scroll">
-            <div v-for="u in students" :key="u.id" class="student-row" :class="{ speaking: u.micOn }">
-              <span class="avatar" :class="{ on: u.micOn }">{{ (u.name || '?').slice(0, 1) }}</span>
+            <div v-for="u in students" :key="u.id" class="student-row" :class="{ speaking: u.micOn, camOn: u.camOn }">
+              <span class="avatar" :class="{ on: u.micOn, cam: u.camOn }">{{ (u.name || '?').slice(0, 1) }}</span>
               <div class="student-meta">
                 <span class="student-name">{{ u.name }}</span>
                 <span class="student-state" :class="{ on: u.micOn }">
                   <template v-if="speakingId === u.id && speakingStatus === 'live'">● 连线中</template>
                   <template v-else-if="speakingId === u.id && speakingStatus === 'invited'">邀请中…</template>
                   <template v-else>在线</template>
+                  <template v-if="u.camOn"> 📷</template>
                 </span>
               </div>
               <div class="student-actions">
@@ -198,6 +216,19 @@
           </div>
           <p class="rail-hint">点「邀请连线」后，学员端的连线按钮会变绿，TA 点击即接入声音，公屏也会播报</p>
         </section>
+
+        <!-- 学员摄像头画面窗（公屏上方，按学员逐个显示） -->
+        <template v-for="u in students" :key="'cam-' + u.id">
+          <div v-if="u.camOn" class="card cam-rail-item">
+            <header class="rail-head">
+              <span class="rail-title">📷 {{ u.name }}</span>
+              <span class="chip">摄像头</span>
+            </header>
+            <div class="cam-rail-body">
+              <video ref="el => setStudentCamRef(u.id, el)" autoplay playsinline muted class="cam-rail-video"></video>
+            </div>
+          </div>
+        </template>
 
         <!-- 公屏聊天 -->
         <section class="card rail-card chat-card">
@@ -246,6 +277,15 @@ const SERVER_URL = import.meta.env && import.meta.env.DEV ? 'http://localhost:30
 const stage = ref('entry')
 const teacherNameInput = ref('')
 const teacherName = ref('')
+
+// 老师端是否使用摄像头作为视频源（移动端没有屏幕共享时用）
+const useCamSource = ref(false)
+const camSourceOn = ref(false)   // 摄像头源是否正在采集
+const camSourcePreview = ref(null) // 本地预览 <video>
+let camSourceStream = null       // 摄像头源流
+// 老师端自己收到的学生摄像头画面（video refs 池，按 studentId 存）
+const studentCamRefs = {}        // studentId → HTMLVideoElement
+const studentCamNames = {}       // studentId → name（显示名字）
 
 const videoRef = ref(null)
 const stageRef = ref(null)
@@ -651,6 +691,75 @@ function kickStudent(studentId) {
         }).catch(() => { })
 }
 
+// ── 老师端摄像头源（移动端替代屏幕共享）──
+function isMobileEnv() {
+    return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '') ||
+        (navigator.maxTouchPoints > 1 && window.innerWidth < 900)
+}
+// 移动端没有屏幕共享，用摄像头作为视频源；桌面端保留屏幕共享
+const mobileTeacher = computed(() => isMobileEnv())
+async function startCamSource() {
+    if (!navigator.mediaDevices?.getUserMedia) { ElMessage.error('此设备无法使用摄像头'); return }
+    try {
+        camSourceStream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'environment' }
+        })
+        camSourceOn.value = true
+        await nextTick()
+        if (camSourcePreview.value) { camSourcePreview.value.srcObject = camSourceStream; camSourcePreview.value.play().catch(() => { }) }
+        // 上课中切换视频源 → 重建 peerStream（保留原有音频轨）
+        if (stage.value === 'live' && peerStream) {
+            const audio = peerStream.getAudioTracks()
+            const rebuilt = new MediaStream([camSourceStream.getVideoTracks()[0], ...audio])
+            peerStream = rebuilt
+            Object.values(peers).forEach(p => {
+                if (!p || p.destroyed) return
+                try { p.removeStream(rebuilt) } catch (e) { }
+                try { p.addStream(rebuilt) } catch (e) { }
+            })
+        }
+        ElMessage.success('📷 摄像头源已开启，学员可看到你的画面')
+    } catch (e) {
+        console.error('开启摄像头源失败', e)
+        ElMessage.error('无法开启摄像头：' + (e.message || e))
+    }
+}
+function stopCamSource() {
+    if (camSourceStream) camSourceStream.getTracks().forEach(t => t.stop())
+    camSourceStream = null; camSourceOn.value = false
+    if (camSourcePreview.value) camSourcePreview.value.srcObject = null
+}
+
+// 学员摄像头画面（显示在公屏上方的小窗口，随 stream 到达自动挂载）
+function setStudentCamRef(id, el) {
+    if (el) {
+        studentCamRefs[id] = el
+        const s = studentStreams[id]
+        if (s) {
+            const vt = s.getVideoTracks()[0]
+            if (vt) {
+                el.srcObject = new MediaStream([vt])
+                el.play().catch(() => { })
+            }
+        }
+    } else {
+        delete studentCamRefs[id]
+    }
+}
+function showStudentCam(id, stream) {
+    const vt = stream.getVideoTracks()[0]
+    if (!vt) return
+    const el = studentCamRefs[id]
+    if (el) {
+        el.srcObject = new MediaStream([vt])
+        el.play().catch(() => { })
+    }
+}
+function hideStudentCam(id) {
+    const el = studentCamRefs[id]
+    if (el) { el.srcObject = null }
+}
+
 // ── 流程 ──
 function enterPrep() {
     const name = teacherNameInput.value.trim()
@@ -660,46 +769,79 @@ function enterPrep() {
 }
 
 async function startClass() {
-    try {
-        // 屏幕共享：没选麦克风时共享系统声音（钢琴软件声），选了麦克风就不传屏幕流音频
-        const screenAudio = selectedMic.value ? false : {
-            systemAudio: 'include'
+    // 移动端没有屏幕共享：用摄像头 + 麦克风作为视频/音频源
+    if (mobileTeacher.value) {
+        try {
+            camSourceStream = await navigator.mediaDevices.getUserMedia({
+                video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'environment' }
+            })
+            camSourceOn.value = true
+        } catch (e) {
+            ElMessage.error('无法开启摄像头，移动端需要摄像头才能开课')
+            return
         }
-        stream = await navigator.mediaDevices.getDisplayMedia({
-            video: {
-                cursor: 'hidden',
-                frameRate: 15
-            },
-            audio: screenAudio
-        })
-        streamReady.value = true
         try { micStream = await navigator.mediaDevices.getUserMedia(micConstraints()) }
-        catch (e) { console.warn('麦克风获取失败，学生可能听不到声音', e); micStream = null }
+        catch (e) { console.warn('麦克风获取失败', e); micStream = null }
 
         peerStream = new MediaStream([
-            ...stream.getVideoTracks(),
+            ...(camSourceStream ? camSourceStream.getVideoTracks() : []),
             ...(micStream ? micStream.getAudioTracks() : [])
         ])
+        stream = camSourceStream   // 复用 stream 变量：本地预览 + 后续操作都按 stream 处理
+        streamReady.value = true
+    } else {
+        try {
+            // 桌面端：屏幕共享 + 麦克风
+            const screenAudio = selectedMic.value ? false : { systemAudio: 'include' }
+            stream = await navigator.mediaDevices.getDisplayMedia({
+                video: { cursor: 'hidden', frameRate: 15 },
+                audio: screenAudio
+            })
+            streamReady.value = true
+            try { micStream = await navigator.mediaDevices.getUserMedia(micConstraints()) }
+            catch (e) { console.warn('麦克风获取失败，学生可能听不到声音', e); micStream = null }
 
-        stage.value = 'live'
-        isClassStarted.value = true
-        classSeconds.value = 0
-        if (classTimer) clearInterval(classTimer)
-        classTimer = setInterval(() => classSeconds.value++, 1000)
-
-        nextTick(() => {
-            if (videoRef.value) {
-                videoRef.value.srcObject = stream
-                wantsPlay.value = true
-                bindVideoGuards()
-                resumeVideoSoon()
-                if (selectedSpeaker.value && typeof videoRef.value.setSinkId === 'function')
-                    videoRef.value.setSinkId(selectedSpeaker.value).catch(() => { })
+            peerStream = new MediaStream([
+                ...stream.getVideoTracks(),
+                ...(micStream ? micStream.getAudioTracks() : [])
+            ])
+        } catch (e) {
+            console.error('屏幕共享失败', e)
+            let msg = '获取屏幕共享失败'
+            if (e && e.name === 'NotAllowedError') {
+                msg = '屏幕共享被拒绝。macOS 请在「系统设置 → 隐私与安全性 → 屏幕录制」中勾选当前浏览器，并重启浏览器'
+            } else if (e && e.name === 'NotFoundError') {
+                msg = '没有找到可共享的屏幕或窗口'
+            } else if (e && e.name === 'NotReadableError') {
+                msg = '无法读取屏幕画面，请检查屏幕录制权限'
+            } else if (e && e.message) {
+                msg = '获取屏幕共享失败：' + e.message
             }
-            watchLiveLayout()
-        })
+            ElMessage.error(msg)
+            return
+        }
+    }
 
-        // 屏幕共享被手动停止时，自动停录制 + 更新 UI
+    stage.value = 'live'
+    isClassStarted.value = true
+    classSeconds.value = 0
+    if (classTimer) clearInterval(classTimer)
+    classTimer = setInterval(() => classSeconds.value++, 1000)
+
+    nextTick(() => {
+        if (videoRef.value) {
+            videoRef.value.srcObject = stream
+            wantsPlay.value = true
+            bindVideoGuards()
+            resumeVideoSoon()
+            if (selectedSpeaker.value && typeof videoRef.value.setSinkId === 'function')
+                videoRef.value.setSinkId(selectedSpeaker.value).catch(() => { })
+        }
+        watchLiveLayout()
+    })
+
+    // 屏幕共享被手动停止时（桌面端）自动停录制 + 更新 UI；移动端摄像头源没有 ended 事件，忽略
+    if (stream && !mobileTeacher.value) {
         stream.getVideoTracks().forEach(t => t.addEventListener('ended', () => {
             if (isRecording.value) stopRecording()
             streamReady.value = false
@@ -708,47 +850,34 @@ async function startClass() {
             if (classTimer) { clearInterval(classTimer); classTimer = null }
             ElMessage.warning('屏幕共享已停止')
         }))
-
-        // ── 建立信令连接（带老师姓名）──
-        socket = io(SERVER_URL, {
-            reconnection: true, reconnectionAttempts: Infinity,
-            reconnectionDelay: 1000, reconnectionDelayMax: 10000, timeout: 5000
-        })
-        setupListeners()
-
-        socket.emit('create-room', { teacherName: teacherName.value }, roomId => {
-            currentRoomId.value = roomId
-            classUrl.value = `${location.origin}/student/${roomId}`
-            ElMessage.success('课程已开始，把学生链接发给学员吧')
-        })
-
-        socket.on('disconnect', reason => {
-            if (socketClosed || reason === 'io client disconnect') return
-            ElMessage.warning('⚠️ 连接断开，正在自动重连...')
-        })
-        socket.on('reconnect', () => {
-            if (socketClosed) return
-            ElMessage.success('✅ 连接已恢复')
-            if (isClassStarted.value && peerStream) {
-                Object.values(peers).forEach(p => { try { p.destroy() } catch (e) { } })
-                peers = {}
-                socket.emit('rebuild-peers', { roomId: currentRoomId.value })
-            }
-        })
-    } catch (e) {
-        console.error('屏幕共享失败', e)
-        let msg = '获取屏幕共享失败'
-        if (e && e.name === 'NotAllowedError') {
-            msg = '屏幕共享被拒绝。macOS 请在「系统设置 → 隐私与安全性 → 屏幕录制」中勾选当前浏览器，并重启浏览器'
-        } else if (e && e.name === 'NotFoundError') {
-            msg = '没有找到可共享的屏幕或窗口'
-        } else if (e && e.name === 'NotReadableError') {
-            msg = '无法读取屏幕画面，请检查屏幕录制权限'
-        } else if (e && e.message) {
-            msg = '获取屏幕共享失败：' + e.message
-        }
-        ElMessage.error(msg)
     }
+
+    // ── 建立信令连接（带老师姓名）──
+    socket = io(SERVER_URL, {
+        reconnection: true, reconnectionAttempts: Infinity,
+        reconnectionDelay: 1000, reconnectionDelayMax: 10000, timeout: 5000
+    })
+    setupListeners()
+
+    socket.emit('create-room', { teacherName: teacherName.value }, roomId => {
+        currentRoomId.value = roomId
+        classUrl.value = `${location.origin}/student/${roomId}`
+        ElMessage.success('课程已开始，把学生链接发给学员吧')
+    })
+
+    socket.on('disconnect', reason => {
+        if (socketClosed || reason === 'io client disconnect') return
+        ElMessage.warning('⚠️ 连接断开，正在自动重连...')
+    })
+    socket.on('reconnect', () => {
+        if (socketClosed) return
+        ElMessage.success('✅ 连接已恢复')
+        if (isClassStarted.value && peerStream) {
+            Object.values(peers).forEach(p => { try { p.destroy() } catch (e) { } })
+            peers = {}
+            socket.emit('rebuild-peers', { roomId: currentRoomId.value })
+        }
+    })
 }
 
 function setupListeners() {
@@ -778,15 +907,20 @@ function setupListeners() {
         })
         peer.on('signal', sig => socket.emit('signal', { to: id, from: socket.id, signal: sig }))
         peer.on('stream', s => {
-            // 学生连线的声音（含音频轨才收）
+            studentStreams[id] = s
+            // 上行音频
             if (s.getAudioTracks().length) {
-                studentStreams[id] = s
                 const u = onlineUsers.value.find(u => u.id === id)
                 if (u?.micOn) playStudentAudio(id)
             }
+            // 上行视频（摄像头）→ 显示在公屏上方
+            if (s.getVideoTracks().length) {
+                studentCamNames[id] = name
+                showStudentCam(id, s)
+            }
         })
         peer.on('error', err => console.error('Peer error', err))
-        peer.on('close', () => { stopStudentAudio(id); delete peers[id] })
+        peer.on('close', () => { stopStudentAudio(id); hideStudentCam(id); delete peers[id] })
         peers[id] = peer
     })
 
@@ -795,19 +929,21 @@ function setupListeners() {
         if (!peerStream) return
         if (peers[studentId]) { try { peers[studentId].destroy() } catch (e) { } }
         stopStudentAudio(studentId)
+        hideStudentCam(studentId)
         const peer = new SimplePeer({
             initiator: true, trickle: false, stream: peerStream, objectMode: true, sdpTransform: s => s
         })
         peer.on('signal', sig => socket.emit('signal', { to: studentId, from: socket.id, signal: sig }))
         peer.on('stream', s => {
+            studentStreams[studentId] = s
             if (s.getAudioTracks().length) {
-                studentStreams[studentId] = s
                 const u = onlineUsers.value.find(u => u.id === studentId)
                 if (u?.micOn) playStudentAudio(studentId)
             }
+            if (s.getVideoTracks().length) showStudentCam(studentId, s)
         })
         peer.on('error', err => console.error('Peer error', err))
-        peer.on('close', () => { stopStudentAudio(studentId); delete peers[studentId] })
+        peer.on('close', () => { stopStudentAudio(studentId); hideStudentCam(studentId); delete peers[studentId] })
         peers[studentId] = peer
     })
 
@@ -821,16 +957,24 @@ function setupListeners() {
                 })
                 peer.on('signal', sig => socket.emit('signal', { to: u.id, from: socket.id, signal: sig }))
                 peer.on('stream', s => {
+                    studentStreams[u.id] = s
                     if (s.getAudioTracks().length) {
-                        studentStreams[u.id] = s
                         if (u.micOn) playStudentAudio(u.id)
                     }
+                    if (s.getVideoTracks().length) showStudentCam(u.id, s)
                 })
                 peer.on('error', err => console.error('Peer error', err))
-                peer.on('close', () => { stopStudentAudio(u.id); delete peers[u.id] })
+                peer.on('close', () => { stopStudentAudio(u.id); hideStudentCam(u.id); delete peers[u.id] })
                 peers[u.id] = peer
             }
         })
+    })
+
+    // 学员摄像头开关（来自 user-cam-update 事件）
+    socket.on('user-cam-update', ({ id, camOn }) => {
+        const u = onlineUsers.value.find(x => x.id === id)
+        if (u) u.camOn = camOn
+        if (!camOn) hideStudentCam(id)
     })
 }
 
@@ -842,9 +986,12 @@ function endClass() {
             if (currentRoomId.value && socket) socket.emit('end-class', currentRoomId.value)
             Object.values(peers).forEach(p => { try { p.destroy() } catch (e) { } })
             Object.keys(studentAudios).forEach(stopStudentAudio)
+            // 清理学员摄像头预览
+            Object.keys(studentCamRefs).forEach(k => { delete studentCamRefs[k] })
             peers = {}
             if (stream) stream.getTracks().forEach(t => t.stop())
             if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null }
+            stopCamSource()   // 关摄像头源
             peerStream = null
             stopVolumeDetection()
             if (socket) { socketClosed = true; socket.disconnect(); socket = null }
@@ -893,6 +1040,7 @@ onBeforeUnmount(() => {
     Object.keys(studentAudios).forEach(stopStudentAudio)
     if (stream) stream.getTracks().forEach(t => t.stop())
     if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null }
+    stopCamSource()
     peerStream = null
     if (socket) socket.disconnect()
 })
@@ -1091,22 +1239,23 @@ onBeforeUnmount(() => {
   }
 }
 
-/* 沉浸式下的浮层（在旋转容器外面，永远正着）——整个全屏里只有这一个控件 */
+/* 沉浸式下的浮层：右下角圆形小按钮，不挡画面主体 */
 .immersive-exit {
   position: fixed; z-index: 10000;
-  top: calc(env(safe-area-inset-top, 0px) + .8rem);
-  right: calc(env(safe-area-inset-right, 0px) + .8rem);
-  display: inline-flex; align-items: center; gap: .35rem;
-  padding: .46rem .9rem .46rem .7rem;
-  border-radius: 999px; border: 1px solid var(--line-2);
-  background: rgba(10,14,20,.86); color: var(--text);
-  font-size: .8rem; font-family: inherit; cursor: pointer;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + .9rem);
+  right: calc(env(safe-area-inset-right, 0px) + .9rem);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 2.9rem; height: 2.9rem;
+  border-radius: 50%; border: 1.5px solid var(--gold-line);
+  background: rgba(10,14,20,.82); color: var(--gold);
+  font-family: inherit; cursor: pointer;
   backdrop-filter: blur(8px);
-  /* 平时淡着不抢眼，碰一下就亮起来 */
-  opacity: .55; transition: opacity .2s, color .15s, border-color .15s;
+  box-shadow: 0 3px 12px rgba(0,0,0,.5);
+  opacity: .95; transition: filter .15s, transform .1s;
 }
+.immersive-exit svg { width: 1.15rem; height: 1.15rem; }
 .immersive-exit:hover,
-.immersive-exit:active { opacity: 1; color: var(--gold); border-color: var(--gold-line); }
+.immersive-exit:active { filter: brightness(1.2); transform: scale(.96); }
 
 /* 浏览器把播放拦下来时的兜底：给一个明确可点的按钮 */
 .resume-btn {
@@ -1161,6 +1310,22 @@ onBeforeUnmount(() => {
 
 /* ═══ 公屏 ═══ */
 .chat-card { flex: 1; min-height: 15rem; }
+
+/* 摄像头源本地预览（老师移动端） */
+.cam-source-preview { margin-top: .8rem; border-radius: var(--r-md); overflow: hidden; border: 1px solid rgba(168,120,255,.4); }
+.cam-source-preview video { display: block; width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #05070A; }
+
+/* 学员摄像头画面窗（公屏上方） */
+.cam-rail-item { padding: .85rem 1.1rem; }
+.cam-rail-item .rail-head { margin-bottom: .55rem; }
+.cam-rail-body {
+  width: 100%; aspect-ratio: 16/9; background: #05070A;
+  border-radius: var(--r-md); overflow: hidden; border: 1px solid rgba(168,120,255,.4);
+}
+.cam-rail-video { display: block; width: 100%; height: 100%; object-fit: cover; background: #05070A; }
+
+/* 学员头像带摄像头状态 */
+.avatar.cam { background: rgba(168,120,255,.18); color: #B88AF6; box-shadow: 0 0 0 1.5px rgba(168,120,255,.5); }
 .chat-scroll { flex: 1; overflow-y: auto; min-height: 0; padding: .2rem; -webkit-overflow-scrolling: touch; }
 .chat-empty { color: var(--text-3); font-size: .85rem; text-align: center; padding: 2rem .5rem; }
 .chat-input-row { display: flex; gap: .5rem; margin-top: .8rem; flex-shrink: 0; align-items: center; }

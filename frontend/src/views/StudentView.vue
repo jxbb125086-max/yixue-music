@@ -85,6 +85,15 @@
           <button v-if="speakState === 'live'" class="mute-btn" :class="{ off: !micOn }" @click="toggleMic">
             {{ micOn ? '🎙 声音开启中' : '🔇 已静音' }}
           </button>
+          <button v-if="speakState === 'live'" class="mute-btn cam" :class="{ off: !camOn }" @click="toggleCam">
+            {{ camOn ? '📷 摄像头开' : '📷 开摄像头' }}
+          </button>
+        </div>
+
+        <!-- 摄像头本地预览：连线中且开了摄像头才显示（放在画面下方，桌面手机都能看到） -->
+        <div v-if="camOn" class="cam-preview card">
+          <video ref="camPreview" autoplay muted playsinline></video>
+          <span class="cam-preview-label">📷 我（对方看到的画面）</span>
         </div>
 
         <!-- 音频设置 -->
@@ -107,14 +116,13 @@
         </div>
       </div>
 
-      <!-- 沉浸式全屏时的浮层：只有退出按钮，画面之外不放任何东西 -->
+      <!-- 沉浸式全屏时的浮层：右下角圆形小按钮，画面之外不放其它东西 -->
       <template v-if="immersive">
-        <button class="immersive-exit" @click="toggleFullscreen">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none"
-            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 9h5V4M20 9h-5V4M20 15h-5v5M4 15h5v5" />
+        <button class="immersive-exit" @click="toggleFullscreen" title="退出全屏">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 6l12 12M18 6L6 18" />
           </svg>
-          <span>退出全屏</span>
         </button>
       </template>
 
@@ -130,6 +138,10 @@
           <button v-if="speakState === 'live'" class="cc-btn mic" :class="{ off: !micOn }"
             @click="toggleMic" :title="micOn ? '点击静音' : '点击开麦'">
             {{ micOn ? '🎙' : '🔇' }}
+          </button>
+          <button v-if="speakState === 'live'" class="cc-btn cam" :class="{ off: !camOn }"
+            @click="toggleCam" :title="camOn ? '关闭摄像头' : '开启摄像头'">
+            {{ camOn ? '📷' : '📷' }}
           </button>
           <button v-if="speakState === 'invited'" class="cc-btn primary" @click="onConnectClick">接受连线</button>
           <button v-else-if="speakState === 'live'" class="cc-btn danger" @click="onConnectClick">断开</button>
@@ -217,6 +229,11 @@ const roomId = ref('')
 // ── 连线状态：idle(灰) → invited(绿·待接受) → live(绿·连线中) ──
 const speakState = ref('idle')
 const micOn = ref(false)
+
+// ── 摄像头（学员端视频连线）：连线中可开/关摄像头，上行给老师 ──
+const camOn = ref(false)
+let camStream = null        // 摄像头独立流（含视频轨）
+const camPreview = ref(null) // 本地预览 <video>
 
 // ── 聊天 ──
 const chatMessages = ref([])
@@ -438,9 +455,10 @@ function onConnectClick() {
         ElMessage.success('已连线，大家能听到你了')
         return
     }
-    // live → 主动断开
+    // live → 主动断开：关摄像头、收麦、停轨
     speakState.value = 'idle'
     micOn.value = false
+    stopCam()            // 先关摄像头（会 removeCamTrackFromPeer）
     removeMicFromPeer()
     socket.emit('end-speak', { roomId: roomId.value })
 }
@@ -449,6 +467,61 @@ function toggleMic() {
     micOn.value = !micOn.value
     if (micStream) micStream.getAudioTracks().forEach(t => { t.enabled = micOn.value })
     socket.emit('toggle-mic', roomId.value)
+}
+
+/* ── 摄像头（视频连线）：连线中才允许开；开启即把视频轨上行给老师，关则停轨 ── */
+async function toggleCam() {
+    if (speakState.value !== 'live') return
+    if (camOn.value) { stopCam(); return }
+    try {
+        camStream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' }
+        })
+        camOn.value = true
+        // 本地预览要等 DOM 渲染出来再接流
+        await nextTick()
+        if (camPreview.value) { camPreview.value.srcObject = camStream; camPreview.value.play().catch(() => { }) }
+        addCamTrackToPeer()
+        socket && socket.emit('toggle-cam', roomId.value)
+        ElMessage.success('📷 摄像头已开启')
+    } catch (e) {
+        console.error('开启摄像头失败', e)
+        ElMessage.error('无法开启摄像头：' + (e.message || e))
+    }
+}
+function stopCam() {
+    if (camStream) camStream.getTracks().forEach(t => t.stop())
+    camStream = null; camOn.value = false
+    if (camPreview.value) camPreview.value.srcObject = null
+    removeCamTrackFromPeer()
+    socket && socket.emit('toggle-cam', roomId.value)
+}
+function addCamTrackToPeer() {
+    if (!camStream) return
+    const track = camStream.getVideoTracks()[0]
+    if (!track) return
+    if (peer && !peer.destroyed) {
+        // 上行流：优先复用 micStream，没有就新建一个只带视频轨的流
+        if (micStream) { micStream.addTrack(track); try { peer.addStream(micStream) } catch (e) { } }
+        else {
+            const vstream = new MediaStream([track])
+            camStream = vstream
+            try { peer.addStream(vstream) } catch (e) { }
+        }
+    }
+}
+function removeCamTrackFromPeer() {
+    if (!camStream) return
+    const track = camStream.getVideoTracks()[0]
+    if (!track) return
+    if (micStream) { micStream.removeTrack(track) }
+    // peer 保持连接（老师可能还听到麦克风），只关摄像头轨
+    if (peer && !peer.destroyed) {
+        // simple-peer 没有 removeTrack 的便捷 API，重建流：保留音频、去掉视频
+        const audioTracks = micStream ? micStream.getAudioTracks() : []
+        const newStream = new MediaStream([...audioTracks])
+        if (newStream.getTracks().length) { try { peer.addStream(newStream) } catch (e) { } }
+    }
 }
 function addMicToPeer() {
     if (!micStream) return
@@ -561,6 +634,8 @@ function initializeConnection() {
     // 连线结束（老师断开 / 取消邀请）
     socket.on('speak-ended', () => {
         speakState.value = 'idle'
+        camOn.value = false
+        stopCam()
         micOn.value = false
         removeMicFromPeer()
     })
@@ -640,6 +715,7 @@ function disconnectAll() {
         videoRef.value.srcObject.getTracks().forEach(t => t.stop())
         videoRef.value.srcObject = null
     }
+    stopCam()
     if (peer) { try { peer.destroy() } catch (e) { }; peer = null }
     connected.value = false
     stopVolumeDetection()
@@ -823,22 +899,23 @@ onBeforeUnmount(() => {
 }
 
 /* 沉浸式下的浮层（在旋转容器外面，永远正着）——整个全屏里只有这一个控件。
-   必须醒目：竖屏转 90° 满屏后藏在画面里，若太暗/太透明用户找不到退出入口。 */
+   放右下角、做小一点（图标按钮），不挡画面主体；转 90° 后仍能按到。 */
 .immersive-exit {
   position: fixed; z-index: 10000;
-  top: calc(env(safe-area-inset-top, 0px) + .9rem);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + .9rem);
   right: calc(env(safe-area-inset-right, 0px) + .9rem);
-  display: inline-flex; align-items: center; gap: .45rem;
-  padding: .55rem 1rem .55rem .85rem;
-  border-radius: 999px; border: 1.5px solid var(--gold-line);
-  background: rgba(10,14,20,.9); color: var(--gold);
-  font-size: .9rem; font-weight: 600; font-family: inherit; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 2.9rem; height: 2.9rem;
+  border-radius: 50%; border: 1.5px solid var(--gold-line);
+  background: rgba(10,14,20,.82); color: var(--gold);
+  font-size: 1.15rem; font-family: inherit; cursor: pointer;
   backdrop-filter: blur(8px);
-  box-shadow: 0 4px 16px rgba(0,0,0,.5);
-  opacity: 1; transition: filter .15s;
+  box-shadow: 0 3px 12px rgba(0,0,0,.5);
+  opacity: .95; transition: filter .15s, transform .1s;
 }
+.immersive-exit svg { width: 1.15rem; height: 1.15rem; }
 .immersive-exit:hover,
-.immersive-exit:active { filter: brightness(1.15); }
+.immersive-exit:active { filter: brightness(1.2); transform: scale(.96); }
 
 /* 浏览器把播放拦下来时的兜底：给一个明确可点的按钮，而不是让用户猜 */
 .resume-btn {
@@ -892,6 +969,9 @@ onBeforeUnmount(() => {
 .cc-btn.danger:hover { background: rgba(229,86,94,.22); }
 .cc-btn.mic { padding: .4rem .55rem; font-size: 1rem; line-height: 1; }
 .cc-btn.mic.off { background: var(--panel-2); border-color: var(--line-2); }
+.cc-btn.cam { padding: .4rem .55rem; font-size: 1rem; line-height: 1; border-color: rgba(168,120,255,.5); background: rgba(168,120,255,.12); }
+.cc-btn.cam:hover { filter: brightness(1.15); }
+.cc-btn.cam.off { background: var(--panel-2); border-color: var(--line-2); }
 
 /* 待接受：绿色呼吸，和原来那个大按钮的语义保持一致 */
 .connect-card.is-invited {
@@ -963,6 +1043,27 @@ onBeforeUnmount(() => {
 .mute-btn:hover { filter: brightness(1.15); }
 .mute-btn.off { border-color: var(--line-2); background: var(--panel-2); color: var(--text-3); }
 
+/* 摄像头按钮：紫色调区别于麦克风绿色 */
+.mute-btn.cam { border-color: rgba(168,120,255,.45); background: rgba(168,120,255,.12); color: #B88AF6; }
+.mute-btn.cam:hover { filter: brightness(1.12); }
+.mute-btn.cam.off { border-color: var(--line-2); background: var(--panel-2); color: var(--text-3); }
+
+/* 摄像头本地预览：连线中开了摄像头才出现，放在画面下方（主列内），桌面手机都能看见 */
+.cam-preview {
+  position: relative; width: 100%; flex-shrink: 0; overflow: hidden;
+  border: 1.5px solid rgba(168,120,255,.45); background: #05070A;
+}
+.cam-preview video {
+  display: block; width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #05070A;
+}
+.cam-preview-label {
+  position: absolute; left: .6rem; bottom: .5rem; z-index: 2;
+  padding: .22rem .6rem; border-radius: 999px;
+  background: rgba(10,14,20,.78); border: 1px solid rgba(168,120,255,.4);
+  color: #B88AF6; font-size: .72rem; font-weight: 500;
+  backdrop-filter: blur(8px);
+}
+
 /* ═══ 公屏 ═══ */
 .chat-card { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 1.1rem 1.25rem; }
 .chat-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .85rem; flex-shrink: 0; }
@@ -1027,6 +1128,8 @@ onBeforeUnmount(() => {
   .connect-btn .connect-text { font-size: .95rem; }
   .connect-btn .connect-sub { font-size: .7rem; }
   .mute-btn { min-height: 3rem; padding: .5rem .8rem; font-size: .85rem; }
+  .mute-btn.cam { border-color: rgba(168,120,255,.45); background: rgba(168,120,255,.12); color: #B88AF6; }
+  .mute-btn.cam.off { border-color: var(--line-2); background: var(--panel-2); color: var(--text-3); }
   .audio-bar { padding: .5rem .7rem; }
 }
 
@@ -1044,6 +1147,7 @@ onBeforeUnmount(() => {
   .connect-btn .connect-text { font-size: .92rem; }
   .connect-btn .connect-sub { font-size: .68rem; }
   .mute-btn { min-height: 2.8rem; padding: .45rem .7rem; font-size: .82rem; }
+  .mute-btn.cam { border-color: rgba(168,120,255,.45); }
   .chat-card { min-height: 12rem; }
   .entry-card { padding: 2rem 1.4rem; }
   .entry-steps { gap: .8rem; }
