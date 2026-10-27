@@ -217,18 +217,18 @@
           <p class="rail-hint">点「邀请连线」后，学员端的连线按钮会变绿，TA 点击即接入声音，公屏也会播报</p>
         </section>
 
-        <!-- 学员摄像头画面窗（公屏上方，按学员逐个显示） -->
-        <template v-for="u in students" :key="'cam-' + u.id">
-          <div v-if="u.camOn" class="card cam-rail-item">
-            <header class="rail-head">
-              <span class="rail-title">📷 {{ u.name }}</span>
-              <span class="chip">摄像头</span>
-            </header>
-            <div class="cam-rail-body">
-              <video ref="el => setStudentCamRef(u.id, el)" autoplay playsinline muted class="cam-rail-video"></video>
-            </div>
+        <!-- 学员摄像头画面窗（公屏上方，按学员逐个显示）
+             注意：用 v-show 而非 v-if，确保 video 元素始终在DOM中，
+             这样 showStudentCam() 能在 stream 到达时立即找到 ref -->
+        <div v-for="u in students" :key="'cam-' + u.id" class="card cam-rail-item" v-show="u.camOn">
+          <header class="rail-head">
+            <span class="rail-title">📷 {{ u.name }}</span>
+            <span class="chip">摄像头</span>
+          </header>
+          <div class="cam-rail-body">
+            <video ref="el => setStudentCamRef(u.id, el)" autoplay playsinline muted class="cam-rail-video"></video>
           </div>
-        </template>
+        </div>
 
         <!-- 公屏聊天 -->
         <section class="card rail-card chat-card">
