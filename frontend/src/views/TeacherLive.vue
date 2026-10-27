@@ -899,7 +899,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.salon { width: 100%; min-height: 100dvh; display: flex; flex-direction: column; }
+.salon { width: 100%; min-height: 100%; min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
 
 /* ═══ 顶栏 ═══ */
 .topbar {
@@ -1161,7 +1161,7 @@ onBeforeUnmount(() => {
 
 /* ═══ 公屏 ═══ */
 .chat-card { flex: 1; min-height: 15rem; }
-.chat-scroll { flex: 1; overflow-y: auto; min-height: 0; padding: .2rem; }
+.chat-scroll { flex: 1; overflow-y: auto; min-height: 0; padding: .2rem; -webkit-overflow-scrolling: touch; }
 .chat-empty { color: var(--text-3); font-size: .85rem; text-align: center; padding: 2rem .5rem; }
 .chat-input-row { display: flex; gap: .5rem; margin-top: .8rem; flex-shrink: 0; align-items: center; }
 .chat-input-row .el-input { flex: 1; }
@@ -1184,30 +1184,34 @@ onBeforeUnmount(() => {
 
 /* ═══ 响应式 ═══ */
 @media (max-width: 899px) {
-  .live { flex-direction: column; }
-  .live-main { width: 100%; }
-  .live-rail { min-width: 0; max-height: none; }
-  .rail-card:not(.chat-card) { max-height: 36vh; }
-  /* 单列时让「宽度」决定画面尺寸：舞台不再抢剩余高度，避免在竖屏平板上撑成一大块 */
-  .stage-area { flex: none; display: block; container-type: normal; }
+  .salon { height: 100%; height: 100vh; height: 100dvh; overflow: hidden; }
+  .live {
+    flex: 1; min-height: 0; flex-direction: column;
+    overflow-y: auto; -webkit-overflow-scrolling: touch;
+  }
+  .live-main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .stage-area { position: sticky; top: 0; z-index: 5; flex: none; display: block; container-type: normal; }
   .video-stage { width: 100%; }
+  .live-rail { min-width: 0; max-height: none; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .rail-card:not(.chat-card) { max-height: 36vh; }
   .audio-strip { width: 100%; }
   .topbar-link { margin: 0 .6rem; }
+  .chat-card { flex: 1; min-height: 12rem; }
 }
 @media (max-width: 640px) {
   .topbar { padding: .6rem .9rem; }
   .live { padding: .8rem; gap: .75rem; }
-  .stage-area { flex: none; display: block; }
-  .video-stage { width: 100%; border-radius: var(--r-md); }
+  .video-stage { border-radius: var(--r-md); }
   .live-badge { top: .5rem; left: .5rem; font-size: .72rem; padding: .22rem .62rem; }
   .fs-btn { right: .5rem; bottom: .5rem; padding: .34rem .68rem .34rem .55rem; font-size: .74rem; }
   .audio-strip { gap: .5rem .8rem; }
   .strip-select { width: 7.5rem; }
   .student-actions .el-button { padding: .4rem .6rem; font-size: .78rem; }
-  .chat-card { min-height: 18rem; }
+  .chat-card { min-height: 12rem; }
   .mode-cards { grid-template-columns: 1fr; }
   /* 手机上顶栏太挤：只留「学生链接」标签和复制按钮，URL 由标题浮层看 */
   .topbar-link { margin: 0 .5rem; padding: .22rem .26rem .22rem .6rem; }
   .tl-url { display: none; }
+  .entry { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 }
 </style>

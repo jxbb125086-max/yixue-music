@@ -676,7 +676,9 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.student { width: 100%; min-height: 100dvh; display: flex; flex-direction: column; }
+/* 兜底顺序很讲究：老 WebView 认 100vh 不认 100dvh；新浏览器（地址栏伸缩）认 100dvh。
+   最后写 dvh，认它的支持它；不支持的机型就停在前面的 100% 兜底上，保证永远有高度。 */
+.student { width: 100%; min-height: 100%; min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
 
 /* ═══ 顶栏 ═══ */
 .topbar {
@@ -964,7 +966,7 @@ onBeforeUnmount(() => {
 .chat-card { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 1.1rem 1.25rem; }
 .chat-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .85rem; flex-shrink: 0; }
 .chat-title { font-size: 1.05rem; font-weight: 600; }
-.chat-scroll { flex: 1; overflow-y: auto; min-height: 0; padding: .2rem; }
+.chat-scroll { flex: 1; overflow-y: auto; min-height: 0; padding: .2rem; -webkit-overflow-scrolling: touch; }
 .chat-empty { color: var(--text-3); font-size: .85rem; text-align: center; padding: 2rem .5rem; }
 .chat-input-row { display: flex; gap: .5rem; margin-top: .7rem; flex-shrink: 0; }
 .chat-input-row .el-input { flex: 1; }
@@ -995,27 +997,34 @@ onBeforeUnmount(() => {
   .entry { overflow-y: auto; }
 }
 
-/* ═══ 响应式：平板（单列，宽度决定画面尺寸）═══ */
+/* ═══ 平板（单列）+ 手机（≤899px）：锁视口高、画面钉住、公屏内部滚 ═══
+   老写法「整页可滚 + 聊天区 flex:1」会让内容超高时整个被拉长（聊天区跟着撑开），
+   低端安卓更糟——100dvh 解析不稳，画面直接被挤出可视区。
+   改成：.student 锁满视口且自己不滚；.live 锁高成为唯一滚动容器；
+   画面 stage-area 用 position:sticky 钉在滚动顶，滚动时始终可见；
+   连线/音频跟随滚，公屏 flex:1 吃掉剩余高度、内部 .chat-scroll 再滚。 */
 @media (max-width: 899px) {
-  .live { flex-direction: column; }
-  .live-main { width: 100%; }
-  .stage-area { flex: none; display: block; container-type: normal; }
+  .student { height: 100%; height: 100vh; height: 100dvh; overflow: hidden; }
+  .live {
+    flex: 1; min-height: 0; flex-direction: column;
+    overflow-y: auto; -webkit-overflow-scrolling: touch;
+  }
+  .live-main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  /* 画面钉在滚动顶：滚到下面聊天时，讲课画面始终露在最上面 */
+  .stage-area { position: sticky; top: 0; z-index: 5; flex: none; }
   .video-stage { width: 100%; }
-  .live-rail { min-width: 0; }
-  .chat-card { min-height: 20rem; }
-  /* 单列时整列等宽，功能框回到 100% */
+  .live-rail { min-width: 0; flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .connect-zone, .audio-bar { width: 100%; }
+  /* 公屏占满剩余高度、内部滚动（聊天再多也不会拉长整页） */
+  .chat-card { flex: 1; min-height: 14rem; }
 }
 
-/* ═══ 响应式：手机（画面 16:9 打头 → 连线 → 音频 → 公屏）═══
-   改成竖向 flex：公屏吃掉剩余高度，一屏刚好铺满，不用来回滚。
-   页面本身仍然可以滚（输入法弹起来时能把输入框滚进视野）。 */
+/* ═══ 手机（≤640px）：更紧凑 ═══ */
 @media (max-width: 640px) {
   .topbar { padding: .6rem .9rem; }
-  .live { display: flex; flex-direction: column; padding: .7rem; gap: .7rem; }
-  .live-main { flex: none; gap: .7rem; }
-  .stage-area { flex: none; display: block; }
-  .video-stage { width: 100%; border-radius: var(--r-md); }
+  .live { padding: .7rem; gap: .7rem; }
+  .live-main { gap: .7rem; }
+  .video-stage { border-radius: var(--r-md); }
   .fs-btn { right: .5rem; bottom: .5rem; padding: .34rem .68rem .34rem .55rem; font-size: .74rem; }
   .audio-bar { gap: .6rem 1rem; padding: .55rem .8rem; }
   .audio-select { width: 8rem; }
@@ -1023,9 +1032,11 @@ onBeforeUnmount(() => {
   .connect-btn { min-height: 4rem; }
   .connect-btn .connect-text { font-size: 1.05rem; }
   .mute-btn { min-height: 4rem; padding: .7rem .9rem; }
-  .chat-card { flex: 1; min-height: 16rem; }
+  .chat-card { min-height: 12rem; }
   .entry-card { padding: 2rem 1.4rem; }
   .entry-steps { gap: .8rem; }
   .emoji-btn { width: 2.7rem; height: 2.7rem; }
+  /* 进入页在锁高容器里也要能滚 */
+  .entry { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 }
 </style>

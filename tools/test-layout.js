@@ -29,9 +29,9 @@ const MOBILE = [
       if (m.video && (Math.abs(m.video.w - m.stage.w) > 2 || Math.abs(m.video.h - m.stage.h) > 2))
         problems.push(`video 没铺满舞台 ${m.video.w}×${m.video.h} vs ${m.stage.w}×${m.stage.h}`);
       if (m.objectFit !== 'cover') problems.push(`object-fit=${m.objectFit}（应为 cover）`);
-      // 与下方功能区不能重叠
-      if (m.below && m.below.t < m.stage.b - 1) problems.push(`与下方功能区重叠 ${m.below.t} < ${m.stage.b}`);
-      if (m.area && (m.stage.t < m.area.t - 1 || m.stage.b > m.area.b + 1)) problems.push('舞台超出舞台区');
+      // 与下方功能区不能重叠（sticky 移动端：画面钉在滚动顶、功能区在其下方，跳过此检查）
+      if (!opts.mobileSticky && m.below && m.below.t < m.stage.b - 1) problems.push(`与下方功能区重叠 ${m.below.t} < ${m.stage.b}`);
+      if (!opts.mobileSticky && m.area && (m.stage.t < m.area.t - 1 || m.stage.b > m.area.b + 1)) problems.push('舞台超出舞台区');
     }
     if (m.overflowX > 1) problems.push(`横向溢出 ${m.overflowX}px`);
     if (opts.noScrollY && m.overflowY > 1) problems.push(`纵向溢出 ${m.overflowY}px`);
@@ -88,15 +88,30 @@ const MOBILE = [
     const { ctx, page } = await newPage(browser, { width: w, height: h });
     await studentJoin(page, '999999');
     const m = await measureStage(page);
-    check(`学员 ${name}`, m);
-    // 手机上「画面 → 连线 → 音频 → 公屏」的顺序要正确
+    check(`学员 ${name}`, m, { mobileSticky: true });
+    // 移动端画面 sticky 钉在滚动顶，滚到聊天时画面仍可见。
+    // 顺序检查：连线 / 音频 / 公屏 在画面下方、自上而下；并验证「聊天再多也不会拉高整页」
     const order = await page.evaluate(() => {
+      const live = document.querySelector('.live');
+      const student = document.querySelector('.student');
+      const sr = document.querySelector('.video-stage').getBoundingClientRect();
+      const lr = live ? live.getBoundingClientRect() : null;
+      const cr = document.querySelector('.chat-card').getBoundingClientRect();
       const y = s => { const e = document.querySelector(s); return e ? e.getBoundingClientRect().top : null; };
-      return { stage: y('.video-stage'), connect: y('.connect-zone'), audio: y('.audio-bar'), chat: y('.chat-card') };
+      return {
+        connect: y('.connect-zone'), audio: y('.audio-bar'), chatTop: cr.top,
+        // 画面（sticky）是否仍落在可视区
+        stageVisible: sr.bottom > (lr ? lr.top : 0) && sr.top < (lr ? lr.bottom : sr.bottom),
+        // 聊天区有界（内部滚，而不是撑开整页）
+        chatBounded: cr.height < 800,
+        pageStretched: student ? student.scrollHeight - student.clientHeight : 0,
+      };
     });
-    const okOrder = order.stage < order.connect && order.connect < order.audio && order.audio < order.chat;
-    if (!okOrder) fail++;
-    out.push(`${okOrder ? '✅' : '❌'} 学员 ${name} 顺序 画面(${Math.round(order.stage)}) < 连线(${Math.round(order.connect)}) < 音频(${Math.round(order.audio)}) < 公屏(${Math.round(order.chat)})`);
+    const okOrder = order.connect < order.audio && order.audio < order.chatTop;
+    const okSticky = order.stageVisible && order.pageStretched <= 4;
+    if (!okOrder || !okSticky) fail++;
+    out.push(`${(okOrder && okSticky) ? '✅' : '❌'} 学员 ${name} 顺序 连线(${Math.round(order.connect)}) < 音频(${Math.round(order.audio)}) < 公屏(${Math.round(order.chatTop)})`
+      + `${order.stageVisible ? '' : '【画面不可见】'} 页面拉伸 ${order.pageStretched}px`);
     await ctx.close();
   }
 
