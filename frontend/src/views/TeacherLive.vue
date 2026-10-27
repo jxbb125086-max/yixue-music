@@ -1190,7 +1190,7 @@ onBeforeUnmount(() => {
     overflow-y: auto; -webkit-overflow-scrolling: touch;
   }
   .live-main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-  .stage-area { position: sticky; top: 0; z-index: 5; flex: none; display: block; container-type: normal; }
+  .stage-area { flex: none; display: block; container-type: normal; }
   .video-stage { width: 100%; }
   .live-rail { min-width: 0; max-height: none; flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .rail-card:not(.chat-card) { max-height: 36vh; }

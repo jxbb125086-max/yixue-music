@@ -822,22 +822,23 @@ onBeforeUnmount(() => {
   }
 }
 
-/* 沉浸式下的浮层（在旋转容器外面，永远正着）——整个全屏里只有这一个控件 */
+/* 沉浸式下的浮层（在旋转容器外面，永远正着）——整个全屏里只有这一个控件。
+   必须醒目：竖屏转 90° 满屏后藏在画面里，若太暗/太透明用户找不到退出入口。 */
 .immersive-exit {
   position: fixed; z-index: 10000;
-  top: calc(env(safe-area-inset-top, 0px) + .8rem);
-  right: calc(env(safe-area-inset-right, 0px) + .8rem);
-  display: inline-flex; align-items: center; gap: .35rem;
-  padding: .46rem .9rem .46rem .7rem;
-  border-radius: 999px; border: 1px solid var(--line-2);
-  background: rgba(10,14,20,.86); color: var(--text);
-  font-size: .8rem; font-family: inherit; cursor: pointer;
+  top: calc(env(safe-area-inset-top, 0px) + .9rem);
+  right: calc(env(safe-area-inset-right, 0px) + .9rem);
+  display: inline-flex; align-items: center; gap: .45rem;
+  padding: .55rem 1rem .55rem .85rem;
+  border-radius: 999px; border: 1.5px solid var(--gold-line);
+  background: rgba(10,14,20,.9); color: var(--gold);
+  font-size: .9rem; font-weight: 600; font-family: inherit; cursor: pointer;
   backdrop-filter: blur(8px);
-  /* 平时淡着不抢眼，碰一下就亮起来 */
-  opacity: .55; transition: opacity .2s, color .15s, border-color .15s;
+  box-shadow: 0 4px 16px rgba(0,0,0,.5);
+  opacity: 1; transition: filter .15s;
 }
 .immersive-exit:hover,
-.immersive-exit:active { opacity: 1; color: var(--gold); border-color: var(--gold-line); }
+.immersive-exit:active { filter: brightness(1.15); }
 
 /* 浏览器把播放拦下来时的兜底：给一个明确可点的按钮，而不是让用户猜 */
 .resume-btn {
@@ -997,46 +998,62 @@ onBeforeUnmount(() => {
   .entry { overflow-y: auto; }
 }
 
-/* ═══ 平板（单列）+ 手机（≤899px）：锁视口高、画面钉住、公屏内部滚 ═══
-   老写法「整页可滚 + 聊天区 flex:1」会让内容超高时整个被拉长（聊天区跟着撑开），
-   低端安卓更糟——100dvh 解析不稳，画面直接被挤出可视区。
-   改成：.student 锁满视口且自己不滚；.live 锁高成为唯一滚动容器；
-   画面 stage-area 用 position:sticky 钉在滚动顶，滚动时始终可见；
-   连线/音频跟随滚，公屏 flex:1 吃掉剩余高度、内部 .chat-scroll 再滚。 */
+/* ═══ 平板（单列）+ 手机（≤899px）：锁视口高、画面完整、聊天吃满剩余 ═══
+   竖屏手机（宽度窄）画面 16:9 必然比聊天矮，下方剩余高度让给聊天区。
+   - .student 锁满视口、自己不滚
+   - .live 锁高成唯一滚动容器（聊天/连线/音频都在其中，页面不被拉长）
+   - 画面 stage-area 正常流（不 sticky，避免高度塌成 0 和中间空白）
+   - 聊天 .chat-card 吃掉剩余高度（竖屏时≈60% 视口），内部再滚
+   根容器补 100%/100vh/100dvh 三级兜底，低端安卓取不到 dvh 也有高度。 */
 @media (max-width: 899px) {
   .student { height: 100%; height: 100vh; height: 100dvh; overflow: hidden; }
   .live {
     flex: 1; min-height: 0; flex-direction: column;
     overflow-y: auto; -webkit-overflow-scrolling: touch;
   }
-  .live-main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-  /* 画面钉在滚动顶：滚到下面聊天时，讲课画面始终露在最上面 */
-  .stage-area { position: sticky; top: 0; z-index: 5; flex: none; }
+  .live-main { flex: none; display: flex; flex-direction: column; }
+  .stage-area { flex: none; display: block; container-type: normal; }
+  /* 画面按 16:9 走，宽度随视口。窄手机(≤640)用 100%；
+     平板(641–899)限到 72% 宽，避免 4:3 大屏下画面太高把聊天挤没 */
   .video-stage { width: 100%; }
+  /* 聊天右栏吃掉「画面下方」的全部剩余高度（≈60% 视口），内部滚 */
   .live-rail { min-width: 0; flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .connect-zone, .audio-bar { width: 100%; }
-  /* 公屏占满剩余高度、内部滚动（聊天再多也不会拉长整页） */
-  .chat-card { flex: 1; min-height: 14rem; }
+  /* 聊天吃掉剩余高度，内部滚；min-height 兜底保证不太小 */
+  .chat-card { flex: 1; min-height: 10rem; }
+  /* 压缩连线按钮 + 音频条，给画面和聊天让地方 */
+  .connect-zone { gap: .5rem; }
+  .connect-btn { min-height: 3rem; }
+  .connect-btn .connect-text { font-size: .95rem; }
+  .connect-btn .connect-sub { font-size: .7rem; }
+  .mute-btn { min-height: 3rem; padding: .5rem .8rem; font-size: .85rem; }
+  .audio-bar { padding: .5rem .7rem; }
 }
 
 /* ═══ 手机（≤640px）：更紧凑 ═══ */
 @media (max-width: 640px) {
-  .topbar { padding: .6rem .9rem; }
-  .live { padding: .7rem; gap: .7rem; }
-  .live-main { gap: .7rem; }
+  .topbar { padding: .55rem .8rem; }
+  .live { padding: .6rem; gap: .6rem; }
+  .live-main { gap: .6rem; }
   .video-stage { border-radius: var(--r-md); }
-  .fs-btn { right: .5rem; bottom: .5rem; padding: .34rem .68rem .34rem .55rem; font-size: .74rem; }
-  .audio-bar { gap: .6rem 1rem; padding: .55rem .8rem; }
-  .audio-select { width: 8rem; }
-  .connect-zone { gap: .6rem; }
-  .connect-btn { min-height: 4rem; }
-  .connect-btn .connect-text { font-size: 1.05rem; }
-  .mute-btn { min-height: 4rem; padding: .7rem .9rem; }
+  .fs-btn { right: .5rem; bottom: .5rem; padding: .3rem .6rem .3rem .5rem; font-size: .72rem; }
+  .audio-bar { gap: .5rem .8rem; padding: .45rem .6rem; }
+  .audio-select { width: 7rem; }
+  .connect-zone { gap: .5rem; }
+  .connect-btn { min-height: 2.8rem; }
+  .connect-btn .connect-text { font-size: .92rem; }
+  .connect-btn .connect-sub { font-size: .68rem; }
+  .mute-btn { min-height: 2.8rem; padding: .45rem .7rem; font-size: .82rem; }
   .chat-card { min-height: 12rem; }
   .entry-card { padding: 2rem 1.4rem; }
   .entry-steps { gap: .8rem; }
-  .emoji-btn { width: 2.7rem; height: 2.7rem; }
+  .emoji-btn { width: 2.6rem; height: 2.6rem; }
   /* 进入页在锁高容器里也要能滚 */
   .entry { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+}
+
+/* ═══ 平板（641–899px）：竖屏 4:3，画面按宽度限到 72%，给聊天让高度 ═══ */
+@media (min-width: 641px) and (max-width: 899px) {
+  .video-stage { width: 72%; margin: 0 auto; }
 }
 </style>
