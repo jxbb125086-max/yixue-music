@@ -731,6 +731,7 @@ function initializeConnection() {
         if (socketClosed || reason === 'io client disconnect') return
         connected.value = false
         if (peer) { try { peer.destroy() } catch (e) { }; peer = null }
+        stopCam()
     })
     socket.on('reconnect', () => {
         connected.value = false

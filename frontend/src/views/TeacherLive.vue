@@ -822,6 +822,7 @@ async function startClass() {
     socket.on('disconnect', reason => {
         if (socketClosed || reason === 'io client disconnect') return
         ElMessage.warning('⚠️ 连接断开，正在自动重连...')
+        stopCamSource()
     })
     socket.on('reconnect', () => {
         if (socketClosed) return
