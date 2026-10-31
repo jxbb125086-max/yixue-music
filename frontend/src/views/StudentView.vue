@@ -87,7 +87,6 @@
           </button>
         </div>
 
-
         <!-- 音频设置 -->
         <div class="audio-bar card">
           <div class="audio-group">
@@ -944,11 +943,6 @@ onBeforeUnmount(() => {
 .cc-btn.danger:hover { background: rgba(229,86,94,.22); }
 .cc-btn.mic { padding: .4rem .55rem; font-size: 1rem; line-height: 1; }
 .cc-btn.mic.off { background: var(--panel-2); border-color: var(--line-2); }
-.cc-btn.cam { padding: .4rem .55rem; font-size: 1rem; line-height: 1; border-color: rgba(168,120,255,.5); background: rgba(168,120,255,.12); }
-.cc-btn.cam:hover { filter: brightness(1.15); }
-.cc-btn.cam.off { background: var(--panel-2); border-color: var(--line-2); }
-.cc-btn.cam.switch { border-color: rgba(255,255,255,.3); background: rgba(255,255,255,.08); color: #fff; }
-.cc-btn.cam.switch:hover { filter: brightness(1.2); background: rgba(255,255,255,.15); }
 
 /* 待接受：绿色呼吸，和原来那个大按钮的语义保持一致 */
 .connect-card.is-invited {
@@ -1084,8 +1078,6 @@ onBeforeUnmount(() => {
   .connect-btn .connect-text { font-size: .95rem; }
   .connect-btn .connect-sub { font-size: .7rem; }
   .mute-btn { min-height: 3rem; padding: .5rem .8rem; font-size: .85rem; }
-  .mute-btn.cam { border-color: rgba(168,120,255,.45); background: rgba(168,120,255,.12); color: #B88AF6; }
-  .mute-btn.cam.off { border-color: var(--line-2); background: var(--panel-2); color: var(--text-3); }
   .audio-bar { padding: .5rem .7rem; }
 }
 
@@ -1103,7 +1095,6 @@ onBeforeUnmount(() => {
   .connect-btn .connect-text { font-size: .92rem; }
   .connect-btn .connect-sub { font-size: .68rem; }
   .mute-btn { min-height: 2.8rem; padding: .45rem .7rem; font-size: .82rem; }
-  .mute-btn.cam { border-color: rgba(168,120,255,.45); }
   .chat-card { min-height: 12rem; }
   .entry-card { padding: 2rem 1.4rem; }
   .entry-steps { gap: .8rem; }
