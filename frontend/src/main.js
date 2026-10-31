@@ -32,6 +32,28 @@ try {
     }
 } catch (e) { /* 忽略 */ }
 
+// ── 真实可视尺寸变量（老安卓适配）──
+// 老安卓 Chrome 的 100vh 会把地址栏下方的高度也算进去，页面底部被顶出屏幕；
+// CSS 在 100vh 与 100dvh 之间还有一级 calc(var(--vh) * 100)，就靠这里喂真实值。
+// 跟随 resize / 转屏 / 地址栏伸缩（visualViewport）实时更新。
+;(function () {
+    const root = document.documentElement
+    let raf = 0
+    function apply() {
+        raf = 0
+        const vv = window.visualViewport
+        const h = vv ? vv.height : window.innerHeight
+        const w = vv ? vv.width : window.innerWidth
+        if (h > 0) root.style.setProperty('--vh', (h * 0.01) + 'px')
+        if (w > 0) root.style.setProperty('--vw', (w * 0.01) + 'px')
+    }
+    function schedule() { if (!raf) raf = requestAnimationFrame(apply) }
+    apply()
+    window.addEventListener('resize', schedule)
+    window.addEventListener('orientationchange', schedule)
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', schedule)
+})()
+
 const app = createApp(App)
 
 for (const [key, component] of Object.entries(ElementPlusIconsVue)) {

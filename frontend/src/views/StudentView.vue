@@ -288,7 +288,6 @@ const ccSub = computed(() => {
 })
 
 // ── 工具 ──
-function formatClock(ts) { return new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }
 function escapeHtml(str) {
     const div = document.createElement('div'); div.textContent = str; return div.innerHTML
 }
@@ -312,7 +311,7 @@ function layoutLive() {
     const live = liveRef.value, area = areaRef.value, main = mainRef.value
     if (!live || !area || !main || !live.isConnected) return
     if (immersive.value || nativeFs.value) return       // 全屏时画面铺满视口，不用算
-    if (window.innerWidth < 900) { main.style.width = ''; return }  // 单列布局，交给 CSS
+    if (window.innerWidth < 900) { main.style.width = ''; fitStageFallback(); return }  // 单列布局，交给 CSS
     const availH = area.clientHeight
     if (availH < 120) return
     const cs = getComputedStyle(live)
@@ -324,6 +323,18 @@ function layoutLive() {
     const byWidth = Math.round(totalW - railIdeal - gap)
     const w = Math.max(320, Math.min(byHeight, byWidth))
     main.style.width = w + 'px'
+    fitStageFallback()
+}
+// 老安卓（Chrome < 88）不认 aspect-ratio，舞台高度会塌：用 JS 按 16:9 补显式高度；
+// 支持的浏览器清掉残留、不插手。layoutLive 在全屏时已提前返回，这里不会碰全屏尺寸。
+function fitStageFallback() {
+    const st = stageRef.value
+    if (!st) return
+    let ok = false
+    try { ok = !!(window.CSS && CSS.supports && CSS.supports('aspect-ratio: 16 / 9')) } catch (e) { ok = false }
+    if (ok) { if (st.style.height) st.style.height = ''; return }
+    const w = st.clientWidth
+    if (w > 0) st.style.height = Math.round(w * 9 / 16) + 'px'
 }
 function watchLiveLayout() {
     const live = liveRef.value
@@ -371,13 +382,23 @@ async function toggleFullscreen() {
     if (immersive.value) { setImmersive(false); return }
 
     if (el.requestFullscreen || el.webkitRequestFullscreen) {
-        try {
-            if (el.requestFullscreen) await el.requestFullscreen({ navigationUI: 'hide' })
-            else await el.webkitRequestFullscreen()
-            lockLandscape()
-            resumeVideoSoon()
-            return
-        } catch (e) { /* 被拒 → 退回 CSS 沉浸式 */ }
+        // 依次尝试：带参（藏导航栏）→ 无参 → webkit 老式。
+        // 老安卓 / 旧 WebView 不认带参调用会直接拒绝，以前就直接掉进沉浸式了；
+        // 多试一轮无参的，很多设备其实能进真全屏。
+        const attempts = []
+        if (el.requestFullscreen) {
+            attempts.push(() => el.requestFullscreen({ navigationUI: 'hide' }))
+            attempts.push(() => el.requestFullscreen())
+        }
+        if (el.webkitRequestFullscreen) attempts.push(() => el.webkitRequestFullscreen())
+        for (const go of attempts) {
+            try {
+                await go()
+                lockLandscape()
+                resumeVideoSoon()
+                return
+            } catch (e) { /* 换下一种试法 */ }
+        }
     }
     setImmersive(true)
 }
@@ -787,7 +808,7 @@ onBeforeUnmount(() => {
 <style scoped>
 /* 兜底顺序很讲究：老 WebView 认 100vh 不认 100dvh；新浏览器（地址栏伸缩）认 100dvh。
    最后写 dvh，认它的支持它；不支持的机型就停在前面的 100% 兜底上，保证永远有高度。 */
-.student { width: 100%; min-height: 100%; min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+.student { width: 100%; min-height: 100%; min-height: 100vh; min-height: calc(var(--vh, 1vh) * 100); min-height: 100dvh; display: flex; flex-direction: column; }
 
 /* ═══ 顶栏 ═══ */
 .topbar {
@@ -873,7 +894,7 @@ onBeforeUnmount(() => {
   object-fit: cover; background: #05070A;
 }
 .video-hint {
-  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0; inset: 0; display: flex; align-items: center; justify-content: center;
   gap: .7rem; color: var(--text-2); font-size: .95rem; pointer-events: none;
 }
 .spinner {
@@ -903,6 +924,7 @@ onBeforeUnmount(() => {
   position: fixed;
   left: 50%; top: 50%;
   width: 100vw; height: 100vh;
+  width: calc(var(--vw, 1vw) * 100); height: calc(var(--vh, 1vh) * 100);
   max-width: none; max-height: none;
   aspect-ratio: auto;
   margin: 0; border: 0; border-radius: 0;
@@ -926,6 +948,15 @@ onBeforeUnmount(() => {
 @media (orientation: portrait) {
   html.is-touch .video-stage.immersive {
     width: 100vh; height: 100vw;
+    width: calc(var(--vh, 1vh) * 100); height: calc(var(--vw, 1vw) * 100);
+    width: 100dvh; height: 100dvw;
+    transform: translate(-50%, -50%) rotate(90deg);
+  }
+  /* 原生全屏同理：方向锁定没生效的老安卓，竖屏进全屏也转 90°，横过来即满屏 */
+  html.is-touch .video-stage:fullscreen,
+  html.is-touch .video-stage:-webkit-full-screen {
+    width: 100vh; height: 100vw;
+    width: calc(var(--vh, 1vh) * 100); height: calc(var(--vw, 1vw) * 100);
     width: 100dvh; height: 100dvw;
     transform: translate(-50%, -50%) rotate(90deg);
   }
@@ -1133,7 +1164,7 @@ onBeforeUnmount(() => {
 
 /* ═══ 桌面端：页面锁定视口高度，只有聊天栏内部滚动 ═══ */
 @media (min-width: 900px) {
-  .student { height: 100dvh; overflow: hidden; }
+  .student { height: 100vh; height: calc(var(--vh, 1vh) * 100); height: 100dvh; overflow: hidden; }
   .entry { overflow-y: auto; }
 }
 
@@ -1145,7 +1176,7 @@ onBeforeUnmount(() => {
    - 聊天 .chat-card 吃掉剩余高度（竖屏时≈60% 视口），内部再滚
    根容器补 100%/100vh/100dvh 三级兜底，低端安卓取不到 dvh 也有高度。 */
 @media (max-width: 899px) {
-  .student { height: 100%; height: 100vh; height: 100dvh; overflow: hidden; }
+  .student { height: 100%; height: 100vh; height: calc(var(--vh, 1vh) * 100); height: 100dvh; overflow: hidden; }
   .live {
     flex: 1; min-height: 0; flex-direction: column;
     overflow-y: auto; -webkit-overflow-scrolling: touch;
@@ -1197,5 +1228,18 @@ onBeforeUnmount(() => {
 /* ═══ 平板（641–899px）：竖屏 4:3，画面按宽度限到 72%，给聊天让高度 ═══ */
 @media (min-width: 641px) and (max-width: 899px) {
   .video-stage { width: 72%; margin: 0 auto; }
+}
+
+/* 老安卓横屏：屏幕高度常常只有 320~400px，功能区按常规尺寸会把画面和聊天挤没。
+   这一档把顶栏/按钮压薄、聊天最小高度放低，优先保住画面。 */
+@media (orientation: landscape) and (max-height: 500px) {
+  .topbar { padding: .35rem .8rem; }
+  .live { padding: .5rem .6rem; gap: .5rem; }
+  .live-main { gap: .5rem; }
+  .connect-btn { min-height: 2.6rem; }
+  .mute-btn { min-height: 2.6rem; }
+  .chat-card { min-height: 7rem; }
+  .entry { padding: 1rem; }
+  .entry-card { padding: 1.4rem 1.2rem; }
 }
 </style>

@@ -366,7 +366,6 @@ html.stage-locked body { overflow: hidden !important; }
 /* ========== 响应式 ========== */
 /* 只保留真正跨页面共用的规则；各页面自己的排版在组件内用 scoped 样式处理 */
 @media (max-width: 899px) {
-  .live-grid { grid-template-columns: 1fr !important; }
   .live-rail { width: 100% !important; max-height: none !important; }
 }
 

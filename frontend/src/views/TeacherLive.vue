@@ -138,6 +138,11 @@
               <span>{{ nativeFs ? '退出全屏' : '全屏' }}</span>
             </button>
             <button v-if="needTap" class="resume-btn" @click="resumeVideo">▶ 点击继续播放</button>
+            <!-- 连线学员开了摄像头：画中画显示 TA 的画面（视频轨本来就传到了老师端，之前没有窗口显示） -->
+            <div v-show="pipStudentId" class="stu-pip">
+              <video ref="pipVideoRef" autoplay playsinline muted></video>
+              <span class="stu-pip-name">{{ pipName }}</span>
+            </div>
             <div v-if="!streamReady" class="video-hint">正在获取屏幕共享画面…</div>
           </div>
         </div>
@@ -266,7 +271,6 @@ const teacherNameInput = ref('')
 const teacherName = ref('')
 
 // 老师端是否使用摄像头作为视频源（移动端没有屏幕共享时用）
-const useCamSource = ref(false)
 const camSourceOn = ref(false)   // 摄像头源是否正在采集
 const camSourcePreview = ref(null) // 本地预览 <video>
 let camSourceStream = null       // 摄像头源流
@@ -344,7 +348,6 @@ function formatRecordTime(s) {
     const sec = (s % 60).toString().padStart(2, '0')
     return (h > 0 ? h + ':' : '') + m + ':' + sec
 }
-function formatClock(ts) { return new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }
 function escapeHtml(str) {
     const div = document.createElement('div'); div.textContent = str; return div.innerHTML
 }
@@ -363,7 +366,7 @@ function layoutLive() {
     const live = liveRef.value, area = areaRef.value, main = mainRef.value
     if (!live || !area || !main || !live.isConnected) return
     if (immersive.value || nativeFs.value) return       // 全屏时画面铺满视口，不用算
-    if (window.innerWidth < 900) { main.style.width = ''; return }  // 单列布局，交给 CSS
+    if (window.innerWidth < 900) { main.style.width = ''; fitStageFallback(); return }  // 单列布局，交给 CSS
     const availH = area.clientHeight
     if (availH < 120) return
     const cs = getComputedStyle(live)
@@ -375,6 +378,18 @@ function layoutLive() {
     const byWidth = Math.round(totalW - railIdeal - gap)
     const w = Math.max(320, Math.min(byHeight, byWidth))
     main.style.width = w + 'px'
+    fitStageFallback()
+}
+// 老安卓（Chrome < 88）不认 aspect-ratio，舞台高度会塌：用 JS 按 16:9 补显式高度；
+// 支持的浏览器清掉残留、不插手。layoutLive 在全屏时已提前返回，这里不会碰全屏尺寸。
+function fitStageFallback() {
+    const st = stageRef.value
+    if (!st) return
+    let ok = false
+    try { ok = !!(window.CSS && CSS.supports && CSS.supports('aspect-ratio: 16 / 9')) } catch (e) { ok = false }
+    if (ok) { if (st.style.height) st.style.height = ''; return }
+    const w = st.clientWidth
+    if (w > 0) st.style.height = Math.round(w * 9 / 16) + 'px'
 }
 function watchLiveLayout() {
     const live = liveRef.value
@@ -419,13 +434,23 @@ async function toggleFullscreen() {
     if (immersive.value) { setImmersive(false); return }
 
     if (el.requestFullscreen || el.webkitRequestFullscreen) {
-        try {
-            if (el.requestFullscreen) await el.requestFullscreen({ navigationUI: 'hide' })
-            else await el.webkitRequestFullscreen()
-            lockLandscape()
-            resumeVideoSoon()
-            return
-        } catch (e) { /* 被拒 → 退回 CSS 沉浸式 */ }
+        // 依次尝试：带参（藏导航栏）→ 无参 → webkit 老式。
+        // 老安卓 / 旧 WebView 不认带参调用会直接拒绝，以前就直接掉进沉浸式了；
+        // 多试一轮无参的，很多设备其实能进真全屏。
+        const attempts = []
+        if (el.requestFullscreen) {
+            attempts.push(() => el.requestFullscreen({ navigationUI: 'hide' }))
+            attempts.push(() => el.requestFullscreen())
+        }
+        if (el.webkitRequestFullscreen) attempts.push(() => el.webkitRequestFullscreen())
+        for (const go of attempts) {
+            try {
+                await go()
+                lockLandscape()
+                resumeVideoSoon()
+                return
+            } catch (e) { /* 换下一种试法 */ }
+        }
     }
     setImmersive(true)
 }
@@ -505,6 +530,30 @@ function stopStudentAudio(id) {
     const a = studentAudios[id]
     if (a) { a.pause(); a.srcObject = null; delete studentAudios[id] }
     delete studentStreams[id]
+    syncPip()
+}
+
+// ── 学员摄像头画中画 ──
+// 连线中的学员开了摄像头、且视频轨已到达时，把 TA 的画面挂到舞台左下角小窗；
+// 状态一变（关摄像头 / 断开连线 / 流变化）就重新对一次，由各事件入口调用。
+const pipVideoRef = ref(null)
+const pipStudentId = ref(null)
+const pipName = computed(() => onlineUsers.value.find(x => x.id === pipStudentId.value)?.name || '学员')
+function syncPip() {
+    let target = null
+    if (speakingStatus.value === 'live' && speakingId.value) {
+        const u = onlineUsers.value.find(x => x.id === speakingId.value)
+        const s = studentStreams[speakingId.value]
+        if (u && u.camOn && s && s.getVideoTracks().length) target = speakingId.value
+    }
+    pipStudentId.value = target
+    nextTick(() => {
+        const v = pipVideoRef.value
+        if (!v) return
+        const s = target ? studentStreams[target] : null
+        if (v.srcObject !== (s || null)) v.srcObject = s || null
+        if (s) v.play().catch(() => { })
+    })
 }
 
 // ── 音频设备 ──
@@ -840,6 +889,7 @@ function setupListeners() {
     socket.on('speak-state', ({ studentId, status }) => {
         speakingId.value = studentId
         speakingStatus.value = status
+        syncPip()
     })
     socket.on('user-mic-update', ({ id, micOn }) => {
         const u = onlineUsers.value.find(u => u.id === id)
@@ -868,6 +918,7 @@ function setupListeners() {
                 const u = onlineUsers.value.find(u => u.id === id)
                 if (u?.micOn) playStudentAudio(id)
             }
+            syncPip()
         })
         peer.on('error', err => console.error('Peer error', err))
         peer.on('close', () => { stopStudentAudio(id); delete peers[id] })
@@ -889,6 +940,7 @@ function setupListeners() {
                 const u = onlineUsers.value.find(u => u.id === studentId)
                 if (u?.micOn) playStudentAudio(studentId)
             }
+            syncPip()
         })
         peer.on('error', err => console.error('Peer error', err))
         peer.on('close', () => { stopStudentAudio(studentId); delete peers[studentId] })
@@ -909,6 +961,7 @@ function setupListeners() {
                     if (s.getAudioTracks().length) {
                         if (u.micOn) playStudentAudio(u.id)
                     }
+                    syncPip()
                 })
                 peer.on('error', err => console.error('Peer error', err))
                 peer.on('close', () => { stopStudentAudio(u.id); delete peers[u.id] })
@@ -917,15 +970,13 @@ function setupListeners() {
         })
     })
 
-    // 学员麦克风状态
-    socket.on('user-mic-update', ({ id, micOn: m }) => {
+    // 学员摄像头状态（之前没人监听这个事件，老师端徽标不实时、画面也没处显示）
+    socket.on('user-cam-update', ({ id, camOn }) => {
         const u = onlineUsers.value.find(x => x.id === id)
-        if (u) u.micOn = m
+        if (u) u.camOn = camOn
+        syncPip()
     })
 
-    socket.on('kicked', ({ teacherName: tn }) => {
-        ElMessage.error(`您已被老师 ${tn || '老师'} 请出沙龙`)
-    })
 }
 
 function endClass() {
@@ -995,7 +1046,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.salon { width: 100%; min-height: 100%; min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+.salon { width: 100%; min-height: 100%; min-height: 100vh; min-height: calc(var(--vh, 1vh) * 100); min-height: 100dvh; display: flex; flex-direction: column; }
 
 /* ═══ 顶栏 ═══ */
 .topbar {
@@ -1123,7 +1174,7 @@ onBeforeUnmount(() => {
   object-fit: cover; background: #05070A;
 }
 .video-hint {
-  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0; inset: 0; display: flex; align-items: center; justify-content: center;
   color: var(--text-3); font-size: .95rem; pointer-events: none;
 }
 .live-badge {
@@ -1148,6 +1199,24 @@ onBeforeUnmount(() => {
 .fs-btn:hover { color: var(--gold); border-color: var(--gold-line); background: rgba(10,14,20,.92); }
 .fs-btn.on { color: var(--gold); border-color: var(--gold-line); }
 
+/* 学员摄像头画中画：舞台左下角（右下角是全屏按钮），小窗看人、大窗看讲课 */
+.stu-pip {
+  position: absolute; left: .7rem; bottom: .7rem; z-index: 5;
+  width: 24%; min-width: 7.5rem; max-width: 15rem;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--r-sm); overflow: hidden;
+  border: 1.5px solid var(--gold-line);
+  background: #000;
+  box-shadow: 0 6px 24px rgba(0,0,0,.5);
+}
+.stu-pip video { display: block; width: 100%; height: 100%; object-fit: cover; }
+.stu-pip-name {
+  position: absolute; left: .45rem; bottom: .35rem;
+  font-size: .7rem; color: var(--text);
+  background: rgba(10,14,20,.72); border-radius: 999px; padding: .1rem .55rem;
+  max-width: calc(100% - .9rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
 /* 全屏：两种模式共用「铺满视口」的样式
    ① 浏览器全屏 → :fullscreen  ② CSS 沉浸式 → .immersive（iPhone / 应用内浏览器） */
 .video-stage:fullscreen,
@@ -1156,6 +1225,7 @@ onBeforeUnmount(() => {
   position: fixed;
   left: 50%; top: 50%;
   width: 100vw; height: 100vh;
+  width: calc(var(--vw, 1vw) * 100); height: calc(var(--vh, 1vh) * 100);
   max-width: none; max-height: none;
   aspect-ratio: auto;
   margin: 0; border: 0; border-radius: 0;
@@ -1167,6 +1237,9 @@ onBeforeUnmount(() => {
 .video-stage:fullscreen video,
 .video-stage:-webkit-full-screen video,
 .video-stage.immersive video { object-fit: contain; }
+.video-stage:fullscreen .stu-pip video,
+.video-stage:-webkit-full-screen .stu-pip video,
+.video-stage.immersive .stu-pip video { object-fit: cover; }
 .video-stage::backdrop { background: #000; }
 
 /* 全屏就是「干净看画面」：徽标、提示一律收起，只留视频本身和退出按钮 */
@@ -1182,6 +1255,15 @@ onBeforeUnmount(() => {
 @media (orientation: portrait) {
   html.is-touch .video-stage.immersive {
     width: 100vh; height: 100vw;
+    width: calc(var(--vh, 1vh) * 100); height: calc(var(--vw, 1vw) * 100);
+    width: 100dvh; height: 100dvw;
+    transform: translate(-50%, -50%) rotate(90deg);
+  }
+  /* 原生全屏同理：方向锁定没生效的老安卓，竖屏进全屏也转 90°，横过来即满屏 */
+  html.is-touch .video-stage:fullscreen,
+  html.is-touch .video-stage:-webkit-full-screen {
+    width: 100vh; height: 100vw;
+    width: calc(var(--vh, 1vh) * 100); height: calc(var(--vw, 1vw) * 100);
     width: 100dvh; height: 100dvw;
     transform: translate(-50%, -50%) rotate(90deg);
   }
@@ -1278,7 +1360,7 @@ onBeforeUnmount(() => {
 
 /* ═══ 桌面端：页面锁定视口高度，只有内部区域滚动 ═══ */
 @media (min-width: 900px) {
-  .salon { height: 100dvh; overflow: hidden; }
+  .salon { height: 100vh; height: calc(var(--vh, 1vh) * 100); height: 100dvh; overflow: hidden; }
   .entry { overflow-y: auto; }
   /* 学员卡按人数长高，最多占右栏 55%，再多才在卡内滚动（原来 42% 放 3 个人就切半行） */
   .rail-card:not(.chat-card) { max-height: 55%; }
@@ -1286,7 +1368,7 @@ onBeforeUnmount(() => {
 
 /* ═══ 响应式 ═══ */
 @media (max-width: 899px) {
-  .salon { height: 100%; height: 100vh; height: 100dvh; overflow: hidden; }
+  .salon { height: 100%; height: 100vh; height: calc(var(--vh, 1vh) * 100); height: 100dvh; overflow: hidden; }
   .live {
     flex: 1; min-height: 0; flex-direction: column;
     overflow-y: auto; -webkit-overflow-scrolling: touch;
@@ -1315,5 +1397,21 @@ onBeforeUnmount(() => {
   .topbar-link { margin: 0 .5rem; padding: .22rem .26rem .22rem .6rem; }
   .tl-url { display: none; }
   .entry { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+}
+
+/* 老安卓横屏：屏幕高度常常只有 320~400px，功能区按常规尺寸会把画面挤没。
+   这一档把顶栏/条带压薄、聊天最小高度放低，优先保住画面。 */
+@media (orientation: landscape) and (max-height: 500px) {
+  .topbar { padding: .35rem .9rem; }
+  .live { padding: .5rem .8rem .7rem; gap: .6rem; }
+  .live-main { gap: .6rem; }
+  .audio-strip { padding: .45rem .8rem; }
+  .rail-card { padding: .7rem .9rem; }
+  .chat-card { min-height: 8rem; }
+  .rail-card:not(.chat-card) { max-height: 30vh; }
+  .entry, .prep { padding: 1rem; }
+  .entry-card { padding: 1.4rem 1.2rem; }
+  .prep-card { padding: 1.2rem; }
+  .entry-steps { margin-top: 1rem; padding-top: 1rem; }
 }
 </style>
