@@ -772,13 +772,11 @@ async function flipCamSource() {
 // 传递画布的 CropTarget（不透明令牌）。开课共享时 cropTo 到画布，学员端只看到
 // 16:9 画布本身：工具栏、状态栏、浏览器边框都不进画面，窗口大小随意。
 const PIANO_ORIGIN = 'http://localhost:8888'
-const pianoState = ref('idle')        // idle | connecting | ready | error
 let pianoWin = null
 let pianoTarget = null
 let pianoWaiter = null                // { resolve, timer }
 function pianoTargetArrived(target) {
     pianoTarget = target
-    pianoState.value = 'ready'
     if (pianoWaiter) { clearTimeout(pianoWaiter.timer); const w = pianoWaiter; pianoWaiter = null; w.resolve(true) }
 }
 window.addEventListener('message', e => {
@@ -788,7 +786,6 @@ window.addEventListener('message', e => {
     } else if (e.data.type === 'yixue-crop-target') {
         pianoTargetArrived(e.data.target)
     } else if (e.data.type === 'yixue-crop-error') {
-        pianoState.value = 'error'
         if (pianoWaiter) { clearTimeout(pianoWaiter.timer); const w = pianoWaiter; pianoWaiter = null; w.resolve(false) }
     }
 })
@@ -800,7 +797,6 @@ function beginPianoHandshake() {
     if (pianoTarget) return Promise.resolve(true)
     pianoWin = window.open(PIANO_ORIGIN + '/', 'yixuePianoCanvas')
     if (!pianoWin) return Promise.resolve(false)
-    pianoState.value = 'connecting'
     const got = new Promise(resolve => {
         pianoWaiter = { resolve, timer: setTimeout(() => { pianoWaiter = null; resolve(false) }, 6000) }
     })

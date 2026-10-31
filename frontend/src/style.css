@@ -94,8 +94,6 @@ html.stage-locked body { overflow: hidden !important; }
   border-radius: var(--r-lg);
 }
 
-.logo-mark { display: inline-flex; align-items: center; justify-content: center; }
-
 .chip {
   display: inline-flex;
   align-items: center;
