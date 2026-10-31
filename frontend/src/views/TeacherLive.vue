@@ -94,6 +94,21 @@
           </div>
         </div>
 
+        <!-- 桌面端：视频源（整页共享 / 排版台画布区域捕获） -->
+        <div v-if="!mobileTeacher" class="field">
+          <div class="field-label">🖥️ 视频源 <span class="field-tip">排版台画布模式只传画布本身，画面在学员端正好铺满</span></div>
+          <div class="mode-cards">
+            <div class="mode-card" :class="{ active: !pianoMode }" @click="pianoMode = false">
+              <b>整页共享</b>
+              <span>共享整个标签页、窗口或屏幕，通用</span>
+            </div>
+            <div class="mode-card" :class="{ active: pianoMode }" @click="connectPianoCanvas">
+              <b>🎹 排版台画布</b>
+              <span>{{ pianoHint }}</span>
+            </div>
+          </div>
+        </div>
+
         <!-- 移动端老师：没有屏幕共享，用摄像头作为视频源 -->
         <div v-if="mobileTeacher" class="field">
           <div class="field-label">📷 视频源 <span class="field-tip">移动端用摄像头代替屏幕共享</span></div>
@@ -763,6 +778,59 @@ function stopCamSource() {
     if (camSourcePreview.value) camSourcePreview.value.srcObject = null
 }
 
+// ── 排版台画布区域捕获（Region Capture，仅 Chrome）──
+// 排版台（http://localhost:8888）与易学不同源，靠 window.open 的窗口引用 + postMessage
+// 传递画布的 CropTarget（不透明令牌）。开课共享时 cropTo 到画布，学员端只看到
+// 16:9 画布本身：工具栏、状态栏、浏览器边框都不进画面，窗口大小随意。
+const PIANO_ORIGIN = 'http://localhost:8888'
+const pianoMode = ref(false)          // 是否选了排版台画布模式
+const pianoState = ref('idle')        // idle | connecting | ready | error
+let pianoWin = null
+let pianoTarget = null
+let pianoWaiter = null                // { resolve, timer }
+const pianoHint = computed(() => {
+    if (pianoState.value === 'connecting') return '正在连接排版台…'
+    if (pianoState.value === 'ready') return '已连接 ✓ 点「开始上课」后，在共享选择框里选「钢琴教学排版台」标签页'
+    if (pianoState.value === 'error') return '没连上：请先双击打开「钢琴排版.command」，再点这里重试'
+    return '点此连接排版台，只传 16:9 画布，学员端画面正好铺满'
+})
+function pianoTargetArrived(target) {
+    pianoTarget = target
+    pianoState.value = 'ready'
+    if (pianoWaiter) { clearTimeout(pianoWaiter.timer); const w = pianoWaiter; pianoWaiter = null; w.resolve(true) }
+}
+window.addEventListener('message', e => {
+    if (e.origin !== PIANO_ORIGIN || !e.data) return
+    if (e.data.type === 'yixue-crop-ready') {
+        if (pianoWin && !pianoWin.closed) pianoWin.postMessage({ type: 'yixue-gimme-crop' }, PIANO_ORIGIN)
+    } else if (e.data.type === 'yixue-crop-target') {
+        pianoTargetArrived(e.data.target)
+    } else if (e.data.type === 'yixue-crop-error') {
+        pianoState.value = 'error'
+        if (pianoWaiter) { clearTimeout(pianoWaiter.timer); const w = pianoWaiter; pianoWaiter = null; w.resolve(false) }
+    }
+})
+async function connectPianoCanvas() {
+    if (!window.CropTarget) { ElMessage.warning('当前浏览器不支持区域捕获（需要 Chrome），请用整页共享'); return }
+    pianoWin = window.open(PIANO_ORIGIN + '/', 'yixuePianoCanvas')
+    if (!pianoWin) { ElMessage.error('弹出窗口被浏览器拦截，请允许本站弹出窗口后重试'); return }
+    pianoState.value = 'connecting'
+    const got = new Promise(resolve => {
+        pianoWaiter = { resolve, timer: setTimeout(() => { pianoWaiter = null; resolve(false) }, 4500) }
+    })
+    // 排版台已经开着时不会再发 ready，主动请求一次；冷启动时靠 ready 再要
+    setTimeout(() => { if (pianoWin && !pianoWin.closed && !pianoTarget) pianoWin.postMessage({ type: 'yixue-gimme-crop' }, PIANO_ORIGIN) }, 800)
+    const ok = await got
+    if (ok) {
+        pianoMode.value = true
+        ElMessage.success('🎹 已连接排版台画布，点「开始上课」后选择排版台标签页共享')
+    } else {
+        pianoState.value = 'error'
+        pianoMode.value = false
+        ElMessage.error('没连上排版台：请先双击打开「钢琴排版.command」，再点「排版台画布」重试')
+    }
+}
+
 // ── 流程 ──
 function enterPrep() {
     const name = teacherNameInput.value.trim()
@@ -800,6 +868,19 @@ async function startClass() {
                 video: { cursor: 'hidden', frameRate: 15 },
                 audio: screenAudio
             })
+            // 排版台画布模式：把共享流裁到排版台画布元素（失败/超时则自动回退整页画面）
+            if (pianoMode.value && pianoTarget) {
+                const vt = stream.getVideoTracks()[0]
+                if (vt && typeof vt.cropTo === 'function') {
+                    // cropTo 在个别环境下可能既不成功也不报错地挂住，用超时兜底，绝不拖住开课
+                    const r = await Promise.race([
+                        vt.cropTo(pianoTarget).then(() => 'ok').catch(() => 'fail'),
+                        new Promise(res => setTimeout(() => res('timeout'), 1500))
+                    ])
+                    if (r === 'ok') ElMessage.success('🎹 已锁定排版台画布，只传画布画面')
+                    else if (r === 'fail') ElMessage.warning('区域捕获没成功（共享时要选「钢琴教学排版台」标签页），已改用整页画面')
+                }
+            }
             streamReady.value = true
             try { micStream = await navigator.mediaDevices.getUserMedia(micConstraints()) }
             catch (e) { console.warn('麦克风获取失败，学生可能听不到声音', e); micStream = null }
