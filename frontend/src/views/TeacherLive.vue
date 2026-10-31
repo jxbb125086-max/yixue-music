@@ -1168,10 +1168,12 @@ onBeforeUnmount(() => {
   background: #05070A; border-color: #222D3D;
   overflow: hidden; display: block;
 }
-/* cover：源画面正好 16:9 时与 contain 等效；源画面带着黑边时把黑边裁掉，绝不出现双重黑边 */
+/* contain：保证源画面完整显示。源是浏览器标签页/窗口时，比例由窗口大小决定、
+   往往不是 16:9，用 cover 会把贴边的内容（琴键、工具栏）裁掉；contain 只留黑边，
+   黑边与舞台黑底一体，不影响观看。源正好 16:9 时两者等效。 */
 .video-stage video {
   display: block; width: 100%; height: 100%;
-  object-fit: cover; background: #05070A;
+  object-fit: contain; background: #05070A;
 }
 .video-hint {
   position: absolute; top: 0; right: 0; bottom: 0; left: 0; inset: 0; display: flex; align-items: center; justify-content: center;
