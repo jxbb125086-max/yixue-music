@@ -85,19 +85,8 @@
           <button v-if="speakState === 'live'" class="mute-btn" :class="{ off: !micOn }" @click="toggleMic">
             {{ micOn ? '🎙 声音开启中' : '🔇 已静音' }}
           </button>
-          <button v-if="speakState === 'live'" class="mute-btn cam" :class="{ off: !camOn }" @click="toggleCam">
-            {{ camOn ? '📷 摄像头开' : '📷 开摄像头' }}
-          </button>
-          <button v-if="speakState === 'live' && camOn" class="mute-btn cam switch" @click="switchCam" title="切换前后摄像头">
-            🔄 切换镜头
-          </button>
         </div>
 
-        <!-- 摄像头本地预览 -->
-        <div v-if="camOn" class="cam-preview card">
-          <video ref="camPreview" autoplay muted playsinline></video>
-          <span class="cam-preview-label">📷 我（对方看到的画面）</span>
-        </div>
 
         <!-- 音频设置 -->
         <div class="audio-bar card">
@@ -141,14 +130,6 @@
           <button v-if="speakState === 'live'" class="cc-btn mic" :class="{ off: !micOn }"
             @click="toggleMic" :title="micOn ? '点击静音' : '点击开麦'">
             {{ micOn ? '🎙' : '🔇' }}
-          </button>
-          <button v-if="speakState === 'live'" class="cc-btn cam" :class="{ off: !camOn }"
-            @click="toggleCam" :title="camOn ? '关闭摄像头' : '开启摄像头'">
-            {{ camOn ? '📷' : '📷' }}
-          </button>
-          <button v-if="speakState === 'live' && camOn" class="cc-btn cam switch"
-            @click="switchCam" :title="camFacing === 'user' ? '切换到后置' : '切换到前置'">
-            🔄
           </button>
           <button v-if="speakState === 'invited'" class="cc-btn primary" @click="onConnectClick">接受连线</button>
           <button v-else-if="speakState === 'live'" class="cc-btn danger" @click="onConnectClick">断开</button>
@@ -236,12 +217,6 @@ const roomId = ref('')
 // ── 连线状态：idle(灰) → invited(绿·待接受) → live(绿·连线中) ──
 const speakState = ref('idle')
 const micOn = ref(false)
-
-// ── 摄像头（学员端视频连线）：连线中可开/关摄像头，上行给老师 ──
-const camOn = ref(false)
-const camFacing = ref('user') // 'user' 前置 / 'environment' 后置
-let camStream = null        // 摄像头独立流（含视频轨）
-const camPreview = ref(null) // 本地预览 <video>
 
 // ── 聊天 ──
 const chatMessages = ref([])
@@ -484,10 +459,9 @@ function onConnectClick() {
         ElMessage.success('已连线，大家能听到你了')
         return
     }
-    // live → 主动断开：关摄像头、收麦、停轨
+    // live → 主动断开：收麦、停轨
     speakState.value = 'idle'
     micOn.value = false
-    stopCam()            // 先关摄像头（会 removeCamTrackFromPeer）
     removeMicFromPeer()
     socket.emit('end-speak', { roomId: roomId.value })
 }
@@ -498,84 +472,6 @@ function toggleMic() {
     socket.emit('toggle-mic', roomId.value)
 }
 
-/* ── 摄像头（视频连线）：连线中才允许开；开启即把视频轨上行给老师，关则停轨 ── */
-async function toggleCam() {
-    if (speakState.value !== 'live') return
-    if (camOn.value) { stopCam(); return }
-    try {
-        camStream = await navigator.mediaDevices.getUserMedia({
-            video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: camFacing.value }
-        })
-        camOn.value = true
-        // 本地预览要等 DOM 渲染出来再接流
-        await nextTick()
-        if (camPreview.value) { camPreview.value.srcObject = camStream; camPreview.value.play().catch(() => { }) }
-        addCamTrackToPeer()
-        socket && socket.emit('toggle-cam', roomId.value)
-        ElMessage.success('📷 摄像头已开启')
-    } catch (e) {
-        console.error('开启摄像头失败', e)
-        ElMessage.error('无法开启摄像头：' + (e.message || e))
-    }
-}
-// 切换前后摄像头（连线中可切换）
-async function switchCam() {
-    if (!camOn.value) return
-    camFacing.value = camFacing.value === 'user' ? 'environment' : 'user'
-    // 关旧流，开新流
-    const oldStream = camStream
-    camStream = null
-    try {
-        camStream = await navigator.mediaDevices.getUserMedia({
-            video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: camFacing.value }
-        })
-        await nextTick()
-        if (camPreview.value) { camPreview.value.srcObject = camStream; camPreview.value.play().catch(() => { }) }
-        // 替换上行视频轨
-        removeCamTrackFromPeer()
-        await nextTick()
-        addCamTrackToPeer()
-        ElMessage.success(camFacing.value === 'user' ? '📷 切换到前置摄像头' : '📷 切换到后置摄像头')
-    } catch (e) {
-        console.error('切换摄像头失败', e)
-        camStream = oldStream // 恢复旧流
-        ElMessage.error('切换摄像头失败')
-    }
-}
-function stopCam() {
-    if (camStream) camStream.getTracks().forEach(t => t.stop())
-    camStream = null; camOn.value = false
-    if (camPreview.value) camPreview.value.srcObject = null
-    removeCamTrackFromPeer()
-    socket && socket.emit('toggle-cam', roomId.value)
-}
-function addCamTrackToPeer() {
-    if (!camStream) return
-    const track = camStream.getVideoTracks()[0]
-    if (!track) return
-    if (peer && !peer.destroyed) {
-        // 上行流：优先复用 micStream，没有就新建一个只带视频轨的流
-        if (micStream) { micStream.addTrack(track); try { peer.addStream(micStream) } catch (e) { } }
-        else {
-            const vstream = new MediaStream([track])
-            camStream = vstream
-            try { peer.addStream(vstream) } catch (e) { }
-        }
-    }
-}
-function removeCamTrackFromPeer() {
-    if (!camStream) return
-    const track = camStream.getVideoTracks()[0]
-    if (!track) return
-    if (micStream) { micStream.removeTrack(track) }
-    // peer 保持连接（老师可能还听到麦克风），只关摄像头轨
-    if (peer && !peer.destroyed) {
-        // simple-peer 没有 removeTrack 的便捷 API，重建流：保留音频、去掉视频
-        const audioTracks = micStream ? micStream.getAudioTracks() : []
-        const newStream = new MediaStream([...audioTracks])
-        if (newStream.getTracks().length) { try { peer.addStream(newStream) } catch (e) { } }
-    }
-}
 function addMicToPeer() {
     if (!micStream) return
     if (peer && !peer.destroyed) {
@@ -687,8 +583,6 @@ function initializeConnection() {
     // 连线结束（老师断开 / 取消邀请）
     socket.on('speak-ended', () => {
         speakState.value = 'idle'
-        camOn.value = false
-        stopCam()
         micOn.value = false
         removeMicFromPeer()
     })
@@ -752,7 +646,6 @@ function initializeConnection() {
         if (socketClosed || reason === 'io client disconnect') return
         connected.value = false
         if (peer) { try { peer.destroy() } catch (e) { }; peer = null }
-        stopCam()
     })
     socket.on('reconnect', () => {
         connected.value = false
@@ -769,7 +662,6 @@ function disconnectAll() {
         videoRef.value.srcObject.getTracks().forEach(t => t.stop())
         videoRef.value.srcObject = null
     }
-    stopCam()
     if (peer) { try { peer.destroy() } catch (e) { }; peer = null }
     connected.value = false
     stopVolumeDetection()
@@ -927,6 +819,7 @@ onBeforeUnmount(() => {
   left: 50%; top: 50%;
   width: 100vw; height: 100vh;
   width: calc(var(--vw, 1vw) * 100); height: calc(var(--vh, 1vh) * 100);
+  width: 100dvw; height: 100dvh;
   max-width: none; max-height: none;
   aspect-ratio: auto;
   margin: 0; border: 0; border-radius: 0;
@@ -934,11 +827,27 @@ onBeforeUnmount(() => {
   z-index: 9998;
   transform: translate(-50%, -50%);
 }
-/* 全屏时画面用 contain —— 宁可两侧留黑边，也不裁掉讲课内容 */
+/* 全屏时画面用 contain —— 宁可两侧留黑边，也不裁掉讲课内容。
+   视频四边钉死舞台并占满舞台层，任何栏/条都不能压住画面边缘 */
 .video-stage:fullscreen video,
 .video-stage:-webkit-full-screen video,
-.video-stage.immersive video { object-fit: contain; }
+.video-stage.immersive video {
+  object-fit: contain;
+  position: absolute; inset: 0; width: 100%; height: 100%;
+}
 .video-stage::backdrop { background: #000; }
+
+/* 原生全屏里只保留一个小圆退出钮（沉浸式用 .immersive-exit）：去掉文字、半透明，
+   贴安全区角落，不压画面主体 */
+.video-stage:fullscreen .fs-btn,
+.video-stage:-webkit-full-screen .fs-btn {
+  width: 2.4rem; height: 2.4rem; padding: 0; justify-content: center;
+  border-radius: 50%; opacity: .82;
+  right: calc(env(safe-area-inset-right, 0px) + .6rem);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + .6rem);
+}
+.video-stage:fullscreen .fs-btn span,
+.video-stage:-webkit-full-screen .fs-btn span { display: none; }
 
 /* 全屏就是「干净看画面」：连接提示一律收起，只留视频本身和退出按钮 */
 .video-stage:fullscreen .video-hint,
@@ -1110,30 +1019,6 @@ onBeforeUnmount(() => {
 }
 .mute-btn:hover { filter: brightness(1.15); }
 .mute-btn.off { border-color: var(--line-2); background: var(--panel-2); color: var(--text-3); }
-
-/* 摄像头按钮：紫色调区别于麦克风绿色 */
-.mute-btn.cam { border-color: rgba(168,120,255,.45); background: rgba(168,120,255,.12); color: #B88AF6; }
-.mute-btn.cam:hover { filter: brightness(1.12); }
-.mute-btn.cam.off { border-color: var(--line-2); background: var(--panel-2); color: var(--text-3); }
-/* 切换镜头按钮 */
-.mute-btn.cam.switch { border-color: rgba(255,255,255,.3); background: rgba(255,255,255,.08); color: #fff; }
-.mute-btn.cam.switch:hover { filter: brightness(1.2); background: rgba(255,255,255,.15); }
-
-/* 摄像头本地预览：连线中开了摄像头才出现，放在画面下方（主列内），桌面手机都能看见 */
-.cam-preview {
-  position: relative; width: 100%; flex-shrink: 0; overflow: hidden;
-  border: 1.5px solid rgba(168,120,255,.45); background: #05070A;
-}
-.cam-preview video {
-  display: block; width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #05070A;
-}
-.cam-preview-label {
-  position: absolute; left: .6rem; bottom: .5rem; z-index: 2;
-  padding: .22rem .6rem; border-radius: 999px;
-  background: rgba(10,14,20,.78); border: 1px solid rgba(168,120,255,.4);
-  color: #B88AF6; font-size: .72rem; font-weight: 500;
-  backdrop-filter: blur(8px);
-}
 
 /* ═══ 公屏 ═══ */
 .chat-card { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 1.1rem 1.25rem; }

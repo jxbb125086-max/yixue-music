@@ -47,7 +47,7 @@
         <el-button class="btn-primary entry-btn" size="large" @click="enterPrep">进入沙龙 →</el-button>
         <div class="entry-steps">
           <div class="step"><i>1</i><span>输入姓名</span></div>
-          <div class="step"><i>2</i><span>检查设备</span></div>
+          <div class="step"><i>2</i><span>选输入源</span></div>
           <div class="step"><i>3</i><span>开始上课</span></div>
         </div>
       </div>
@@ -57,42 +57,7 @@
     <main v-else-if="stage === 'prep'" class="prep">
       <div class="prep-card card">
         <h2 class="prep-title">准备好，就开始了</h2>
-        <p class="prep-sub">花三十秒检查设备，上课后也能随时改</p>
-
-        <div class="field">
-          <div class="field-label">🎤 麦克风 <span class="field-tip">学生听您说话、弹琴</span></div>
-          <div class="field-row">
-            <el-select v-model="selectedMic" placeholder="选择麦克风" class="grow" @change="onMicChange">
-              <el-option v-for="d in audioDevices.mics" :key="d.deviceId"
-                :label="d.label || '麦克风 ' + (audioDevices.mics.indexOf(d)+1)" :value="d.deviceId" />
-            </el-select>
-            <div class="vol-bar"><div class="vol-fill" :style="{ width: micVolume + '%' }"></div></div>
-            <span class="vol-val">{{ micVolume }}%</span>
-            <el-button @click="testMic" :loading="testingMic">试听</el-button>
-          </div>
-        </div>
-
-        <div class="field">
-          <div class="field-label">🔊 扬声器 <span class="field-tip">您听学员说话</span></div>
-          <el-select v-model="selectedSpeaker" placeholder="选择扬声器" class="grow" @change="onSpeakerChange">
-            <el-option v-for="d in audioDevices.speakers" :key="d.deviceId"
-              :label="d.label || '扬声器 ' + (audioDevices.speakers.indexOf(d)+1)" :value="d.deviceId" />
-          </el-select>
-        </div>
-
-        <div class="field">
-          <div class="field-label">🎹 声音模式</div>
-          <div class="mode-cards">
-            <div class="mode-card" :class="{ active: isMusicMode }" @click="setMusicMode(true)">
-              <b>钢琴音质</b>
-              <span>不加工、原样传输，弹琴音色最好</span>
-            </div>
-            <div class="mode-card" :class="{ active: !isMusicMode }" @click="setMusicMode(false)">
-              <b>说话音质</b>
-              <span>降噪更清晰，适合讲话多的时候</span>
-            </div>
-          </div>
-        </div>
+        <p class="prep-sub">选好输入源，点按钮就能上课</p>
 
         <!-- 桌面端：视频源（整页共享 / 排版台画布区域捕获） -->
         <div v-if="!mobileTeacher" class="field">
@@ -153,11 +118,6 @@
               <span>{{ nativeFs ? '退出全屏' : '全屏' }}</span>
             </button>
             <button v-if="needTap" class="resume-btn" @click="resumeVideo">▶ 点击继续播放</button>
-            <!-- 连线学员开了摄像头：画中画显示 TA 的画面（视频轨本来就传到了老师端，之前没有窗口显示） -->
-            <div v-show="pipStudentId" class="stu-pip">
-              <video ref="pipVideoRef" autoplay playsinline muted></video>
-              <span class="stu-pip-name">{{ pipName }}</span>
-            </div>
             <div v-if="!streamReady" class="video-hint">正在获取屏幕共享画面…</div>
           </div>
         </div>
@@ -173,21 +133,6 @@
         </template>
 
         <div class="audio-strip card">
-          <div class="strip-group">
-            <span class="strip-label">麦克风</span>
-            <el-select v-model="selectedMic" class="strip-select" size="small" @change="onMicChange">
-              <el-option v-for="d in audioDevices.mics" :key="d.deviceId"
-                :label="d.label || '麦克风 ' + (audioDevices.mics.indexOf(d)+1)" :value="d.deviceId" />
-            </el-select>
-            <div class="vol-bar sm"><div class="vol-fill" :style="{ width: micVolume + '%' }"></div></div>
-          </div>
-          <div class="strip-group hide-m">
-            <span class="strip-label">扬声器</span>
-            <el-select v-model="selectedSpeaker" class="strip-select" size="small" @change="onSpeakerChange">
-              <el-option v-for="d in audioDevices.speakers" :key="d.deviceId"
-                :label="d.label || '扬声器 ' + (audioDevices.speakers.indexOf(d)+1)" :value="d.deviceId" />
-            </el-select>
-          </div>
           <div class="strip-group">
             <span class="strip-label">声音</span>
             <el-button size="small" class="btn-ghost" @click="toggleAudioMode">
@@ -212,15 +157,14 @@
             还没有学员加入<br/>把顶栏的学生链接发给学员即可
           </div>
           <div class="student-scroll">
-            <div v-for="u in students" :key="u.id" class="student-row" :class="{ speaking: u.micOn, camOn: u.camOn }">
-              <span class="avatar" :class="{ on: u.micOn, cam: u.camOn }">{{ (u.name || '?').slice(0, 1) }}</span>
+            <div v-for="u in students" :key="u.id" class="student-row" :class="{ speaking: u.micOn }">
+              <span class="avatar" :class="{ on: u.micOn }">{{ (u.name || '?').slice(0, 1) }}</span>
               <div class="student-meta">
                 <span class="student-name">{{ u.name }}</span>
                 <span class="student-state" :class="{ on: u.micOn }">
                   <template v-if="speakingId === u.id && speakingStatus === 'live'">● 连线中</template>
                   <template v-else-if="speakingId === u.id && speakingStatus === 'invited'">邀请中…</template>
                   <template v-else>在线</template>
-                  <template v-if="u.camOn"> 📷</template>
                 </span>
               </div>
               <div class="student-actions">
@@ -272,7 +216,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { io } from 'socket.io-client'
 import SimplePeer from 'simple-peer'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -280,7 +224,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 // 生产模式（前后端同端口部署）用同源连接；vite 开发模式(5173)才需要指定后端地址
 const SERVER_URL = import.meta.env && import.meta.env.DEV ? 'http://localhost:3000' : undefined
 
-// ── 流程状态：entry(姓名) → prep(设备) → live(上课中) ──
+// ── 流程状态：entry(姓名) → prep(选输入源) → live(上课中) ──
 const stage = ref('entry')
 const teacherNameInput = ref('')
 const teacherName = ref('')
@@ -329,12 +273,7 @@ const isRecording = ref(false)
 const recordSeconds = ref(0)
 let recordTimer = null
 
-// 音频设备
-const audioDevices = reactive({ mics: [], speakers: [] })
-const selectedMic = ref('')
-const selectedSpeaker = ref('')
-const testingMic = ref(false)
-const micVolume = ref(0)
+// 声音模式（钢琴音质默认开；课堂中可在音频条切换，设备一律用系统默认）
 const isMusicMode = ref(localStorage.getItem('mc_audio_mode') !== 'voice')
 
 // 网络 & 媒体
@@ -346,8 +285,6 @@ let micStream = null      // 推给学生的麦克风流
 let peerStream = null     // 推给学生的完整流（画面+麦声）
 let recorder = null
 let recordingChunks = []
-let audioContext = null, analyser = null, micSource = null, volumeInterval = null
-let teacherMicStream = null
 
 const students = computed(() => onlineUsers.value.filter(u => u.role === 'student'))
 
@@ -545,140 +482,20 @@ function stopStudentAudio(id) {
     const a = studentAudios[id]
     if (a) { a.pause(); a.srcObject = null; delete studentAudios[id] }
     delete studentStreams[id]
-    syncPip()
 }
 
-// ── 学员摄像头画中画 ──
-// 连线中的学员开了摄像头、且视频轨已到达时，把 TA 的画面挂到舞台左下角小窗；
-// 状态一变（关摄像头 / 断开连线 / 流变化）就重新对一次，由各事件入口调用。
-const pipVideoRef = ref(null)
-const pipStudentId = ref(null)
-const pipName = computed(() => onlineUsers.value.find(x => x.id === pipStudentId.value)?.name || '学员')
-function syncPip() {
-    let target = null
-    if (speakingStatus.value === 'live' && speakingId.value) {
-        const u = onlineUsers.value.find(x => x.id === speakingId.value)
-        const s = studentStreams[speakingId.value]
-        if (u && u.camOn && s && s.getVideoTracks().length) target = speakingId.value
-    }
-    pipStudentId.value = target
-    nextTick(() => {
-        const v = pipVideoRef.value
-        if (!v) return
-        const s = target ? studentStreams[target] : null
-        if (v.srcObject !== (s || null)) v.srcObject = s || null
-        if (s) v.play().catch(() => { })
-    })
-}
-
-// ── 音频设备 ──
+// ── 声音模式 ──
 function micConstraints() {
-    const base = selectedMic.value ? { deviceId: selectedMic.value } : {}
     if (isMusicMode.value) {
-        return { audio: { ...base, echoCancellation: false, noiseSuppression: false, autoGainControl: false } }
+        return { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }
     }
-    return { audio: { ...base, echoCancellation: true, noiseSuppression: true, autoGainControl: true } }
+    return { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }
 }
 function toggleAudioMode() {
     isMusicMode.value = !isMusicMode.value
     localStorage.setItem('mc_audio_mode', isMusicMode.value ? 'music' : 'voice')
     ElMessage.success(isMusicMode.value ? '🎵 已切换钢琴音质（保真）' : '🗣️ 已切换说话音质（降噪）')
-    if (teacherMicStream) { teacherMicStream.getTracks().forEach(t => t.stop()); teacherMicStream = null }
-    startTeacherMicDetection()
 }
-function setMusicMode(v) { if (isMusicMode.value !== v) toggleAudioMode() }
-
-async function getAudioDevices() {
-    try {
-        const temp = await navigator.mediaDevices.getUserMedia({ audio: true })
-        temp.getTracks().forEach(t => t.stop())
-        const devices = await navigator.mediaDevices.enumerateDevices()
-        audioDevices.mics = devices.filter(d => d.kind === 'audioinput')
-        audioDevices.speakers = devices.filter(d => d.kind === 'audiooutput')
-        if (audioDevices.mics.length > 0 && !selectedMic.value) selectedMic.value = audioDevices.mics[0].deviceId
-        await startTeacherMicDetection()
-    } catch (e) { console.error('获取设备失败', e) }
-}
-
-async function startTeacherMicDetection() {
-    try {
-        teacherMicStream = await navigator.mediaDevices.getUserMedia(micConstraints())
-        startVolumeDetection(teacherMicStream)
-    } catch (e) { console.error('[老师麦克风] 获取失败:', e) }
-}
-
-function startVolumeDetection(mediaStream) {
-    stopVolumeDetection()
-    if (!mediaStream?.getAudioTracks().length) return
-    audioContext = new (window.AudioContext || window.webkitAudioContext)()
-    analyser = audioContext.createAnalyser()
-    analyser.fftSize = 512
-    analyser.smoothingTimeConstant = 0.3
-    micSource = audioContext.createMediaStreamSource(mediaStream)
-    micSource.connect(analyser)
-    const buf = new Uint8Array(analyser.fftSize)
-    volumeInterval = setInterval(() => {
-        if (audioContext.state === 'suspended') audioContext.resume()
-        analyser.getByteTimeDomainData(buf)
-        let sum = 0
-        for (let i = 0; i < buf.length; i++) { const x = (buf[i] - 128) / 128; sum += x * x }
-        micVolume.value = Math.min(100, Math.round(Math.sqrt(sum / buf.length) * 600))
-    }, 30)
-}
-function stopVolumeDetection() {
-    if (volumeInterval) { clearInterval(volumeInterval); volumeInterval = null }
-    if (micSource) { micSource.disconnect(); micSource = null }
-    if (audioContext) { audioContext.close().catch(() => { }); audioContext = null }
-    micVolume.value = 0
-}
-
-async function testMic() {
-    testingMic.value = true
-    try {
-        const ts = await navigator.mediaDevices.getUserMedia(micConstraints())
-        const ctx = new (window.AudioContext || window.webkitAudioContext)()
-        const src = ctx.createMediaStreamSource(ts)
-        const ana = ctx.createAnalyser(); ana.fftSize = 2048
-        src.connect(ana)
-        const buf = new Uint8Array(ana.fftSize)
-        let hasSound = false
-        const iv = setInterval(() => {
-            ana.getByteTimeDomainData(buf)
-            let sum = 0
-            for (let i = 0; i < buf.length; i++) { const x = (buf[i] - 128) / 128; sum += x * x }
-            if (Math.sqrt(sum / buf.length) * 400 > 0.05) hasSound = true
-        }, 100)
-        setTimeout(() => {
-            clearInterval(iv); ctx.close()
-            ts.getTracks().forEach(t => t.stop())
-            testingMic.value = false
-            ElMessage.success(hasSound ? '✅ 麦克风正常' : '⚠️ 未检测到声音，请检查麦克风')
-        }, 2000)
-    } catch (e) {
-        ElMessage.error('测试失败: ' + e.message)
-        testingMic.value = false
-    }
-}
-
-function onMicChange() {
-    if (teacherMicStream) { teacherMicStream.getTracks().forEach(t => t.stop()); teacherMicStream = null }
-    startTeacherMicDetection()
-    if (stream) {
-        const old = stream.getAudioTracks()[0]
-        if (old) old.stop()
-        navigator.mediaDevices.getUserMedia(micConstraints())
-            .then(newStream => { stream.addTrack(newStream.getAudioTracks()[0]); ElMessage.success('麦克风已切换') })
-            .catch(() => ElMessage.error('切换失败'))
-    }
-}
-function onSpeakerChange() {
-    if (videoRef.value && typeof videoRef.value.setSinkId === 'function') {
-        videoRef.value.setSinkId(selectedSpeaker.value)
-            .then(() => ElMessage.success('扬声器已切换'))
-            .catch(() => ElMessage.warning('切换失败'))
-    }
-}
-
 // ── 录制 ──
 function startRecording() {
     if (!peerStream) { ElMessage.warning('请先开始上课'); return }
@@ -863,7 +680,7 @@ async function startClass() {
     } else {
         try {
             // 桌面端：屏幕共享 + 麦克风
-            const screenAudio = selectedMic.value ? false : { systemAudio: 'include' }
+            const screenAudio = { systemAudio: 'include' }
             stream = await navigator.mediaDevices.getDisplayMedia({
                 video: { cursor: 'hidden', frameRate: 15 },
                 audio: screenAudio
@@ -918,8 +735,6 @@ async function startClass() {
             wantsPlay.value = true
             bindVideoGuards()
             resumeVideoSoon()
-            if (selectedSpeaker.value && typeof videoRef.value.setSinkId === 'function')
-                videoRef.value.setSinkId(selectedSpeaker.value).catch(() => { })
         }
         watchLiveLayout()
     })
@@ -970,7 +785,6 @@ function setupListeners() {
     socket.on('speak-state', ({ studentId, status }) => {
         speakingId.value = studentId
         speakingStatus.value = status
-        syncPip()
     })
     socket.on('user-mic-update', ({ id, micOn }) => {
         const u = onlineUsers.value.find(u => u.id === id)
@@ -999,7 +813,6 @@ function setupListeners() {
                 const u = onlineUsers.value.find(u => u.id === id)
                 if (u?.micOn) playStudentAudio(id)
             }
-            syncPip()
         })
         peer.on('error', err => console.error('Peer error', err))
         peer.on('close', () => { stopStudentAudio(id); delete peers[id] })
@@ -1021,7 +834,6 @@ function setupListeners() {
                 const u = onlineUsers.value.find(u => u.id === studentId)
                 if (u?.micOn) playStudentAudio(studentId)
             }
-            syncPip()
         })
         peer.on('error', err => console.error('Peer error', err))
         peer.on('close', () => { stopStudentAudio(studentId); delete peers[studentId] })
@@ -1042,20 +854,12 @@ function setupListeners() {
                     if (s.getAudioTracks().length) {
                         if (u.micOn) playStudentAudio(u.id)
                     }
-                    syncPip()
                 })
                 peer.on('error', err => console.error('Peer error', err))
                 peer.on('close', () => { stopStudentAudio(u.id); delete peers[u.id] })
                 peers[u.id] = peer
             }
         })
-    })
-
-    // 学员摄像头状态（之前没人监听这个事件，老师端徽标不实时、画面也没处显示）
-    socket.on('user-cam-update', ({ id, camOn }) => {
-        const u = onlineUsers.value.find(x => x.id === id)
-        if (u) u.camOn = camOn
-        syncPip()
     })
 
 }
@@ -1073,7 +877,6 @@ function endClass() {
             if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null }
             stopCamSource()   // 关摄像头源
             peerStream = null
-            stopVolumeDetection()
             if (socket) { socketClosed = true; socket.disconnect(); socket = null }
             if (videoRef.value) videoRef.value.srcObject = null
             isClassStarted.value = false
@@ -1099,8 +902,6 @@ onMounted(async () => {
     document.addEventListener('webkitfullscreenchange', onFullscreenChange)
     document.addEventListener('visibilitychange', onVisibility)
     document.addEventListener('keydown', onKeydown)
-    await getAudioDevices()
-    navigator.mediaDevices.addEventListener('devicechange', getAudioDevices)
 })
 onBeforeUnmount(() => {
     document.removeEventListener('click', onDocClick)
@@ -1114,8 +915,6 @@ onBeforeUnmount(() => {
     unwatchLiveLayout()
     if (isRecording.value) stopRecording()
     socketClosed = true
-    stopVolumeDetection()
-    if (teacherMicStream) { teacherMicStream.getTracks().forEach(t => t.stop()); teacherMicStream = null }
     Object.values(peers).forEach(p => { try { p.destroy() } catch (e) { } })
     Object.keys(studentAudios).forEach(stopStudentAudio)
     if (stream) stream.getTracks().forEach(t => t.stop())
@@ -1282,24 +1081,6 @@ onBeforeUnmount(() => {
 .fs-btn:hover { color: var(--gold); border-color: var(--gold-line); background: rgba(10,14,20,.92); }
 .fs-btn.on { color: var(--gold); border-color: var(--gold-line); }
 
-/* 学员摄像头画中画：舞台左下角（右下角是全屏按钮），小窗看人、大窗看讲课 */
-.stu-pip {
-  position: absolute; left: .7rem; bottom: .7rem; z-index: 5;
-  width: 24%; min-width: 7.5rem; max-width: 15rem;
-  aspect-ratio: 16 / 9;
-  border-radius: var(--r-sm); overflow: hidden;
-  border: 1.5px solid var(--gold-line);
-  background: #000;
-  box-shadow: 0 6px 24px rgba(0,0,0,.5);
-}
-.stu-pip video { display: block; width: 100%; height: 100%; object-fit: cover; }
-.stu-pip-name {
-  position: absolute; left: .45rem; bottom: .35rem;
-  font-size: .7rem; color: var(--text);
-  background: rgba(10,14,20,.72); border-radius: 999px; padding: .1rem .55rem;
-  max-width: calc(100% - .9rem); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-
 /* 全屏：两种模式共用「铺满视口」的样式
    ① 浏览器全屏 → :fullscreen  ② CSS 沉浸式 → .immersive（iPhone / 应用内浏览器） */
 .video-stage:fullscreen,
@@ -1320,9 +1101,6 @@ onBeforeUnmount(() => {
 .video-stage:fullscreen video,
 .video-stage:-webkit-full-screen video,
 .video-stage.immersive video { object-fit: contain; }
-.video-stage:fullscreen .stu-pip video,
-.video-stage:-webkit-full-screen .stu-pip video,
-.video-stage.immersive .stu-pip video { object-fit: cover; }
 .video-stage::backdrop { background: #000; }
 
 /* 全屏就是「干净看画面」：徽标、提示一律收起，只留视频本身和退出按钮 */
@@ -1387,8 +1165,6 @@ onBeforeUnmount(() => {
 }
 .strip-group { display: flex; align-items: center; gap: .55rem; min-width: 0; }
 .strip-label { font-size: .82rem; color: var(--text-2); white-space: nowrap; }
-.strip-select { width: 9.5rem; }
-.vol-bar.sm { width: 5rem; flex: none; }
 .strip-rec { margin-left: auto; }
 
 /* ═══ 右栏卡片 ═══ */
@@ -1472,7 +1248,6 @@ onBeforeUnmount(() => {
   .live-badge { top: .5rem; left: .5rem; font-size: .72rem; padding: .22rem .62rem; }
   .fs-btn { right: .5rem; bottom: .5rem; padding: .34rem .68rem .34rem .55rem; font-size: .74rem; }
   .audio-strip { gap: .5rem .8rem; }
-  .strip-select { width: 7.5rem; }
   .student-actions .el-button { padding: .4rem .6rem; font-size: .78rem; }
   .chat-card { min-height: 12rem; }
   .mode-cards { grid-template-columns: 1fr; }

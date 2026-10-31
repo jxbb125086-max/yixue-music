@@ -29,9 +29,9 @@ if (isProd) {
 
 // ── 房间 / 用户数据 ──
 // room: { users[], teacher, teacherName, chatHistory[], speaking: { studentId, status } | null }
-// user: { name, role, room, micOn, camOn }
+// user: { name, role, room, micOn }
 const rooms = {};
-const users = {}; // socketId → { name, role, room, micOn, camOn }
+const users = {}; // socketId → { name, role, room, micOn }
 
 function getRoomUsers(roomId) {
     const room = rooms[roomId];
@@ -41,7 +41,6 @@ function getRoomUsers(roomId) {
         name: users[sid]?.name ?? '未知',
         role: users[sid]?.role ?? 'student',
         micOn: users[sid]?.micOn ?? false,
-        camOn: users[sid]?.camOn ?? false
     }));
 }
 
@@ -85,7 +84,7 @@ io.on('connection', socket => {
     socket.on('create-room', ({ teacherName = '老师' } = {}, cb) => {
         const roomId = generateRoomId();
         rooms[roomId] = { users: [socket.id], teacher: socket.id, teacherName, chatHistory: [], speaking: null };
-        users[socket.id] = { name: teacherName, role: 'teacher', room: roomId, micOn: true, camOn: false };
+        users[socket.id] = { name: teacherName, role: 'teacher', room: roomId, micOn: true };
         socket.join(roomId);
         cb && cb(roomId);
     });
@@ -93,7 +92,7 @@ io.on('connection', socket => {
     // ── 加入房间（学生）──
     socket.on('join-room', ({ roomId, userName = '学员' }) => {
         if (!rooms[roomId]) return;
-        users[socket.id] = { name: userName, role: 'student', room: roomId, micOn: false, camOn: false };
+        users[socket.id] = { name: userName, role: 'student', room: roomId, micOn: false };
         if (!rooms[roomId].users.includes(socket.id)) rooms[roomId].users.push(socket.id);
         socket.join(roomId);
 
@@ -173,16 +172,6 @@ io.on('connection', socket => {
         if (!room?.speaking || room.speaking.studentId !== socket.id || room.speaking.status !== 'live') return;
         user.micOn = !user.micOn;
         io.to(roomId).emit('user-mic-update', { id: socket.id, micOn: user.micOn });
-    });
-
-    // ── 学员连线中开/关摄像头（视频连线）──
-    socket.on('toggle-cam', roomId => {
-        const user = users[socket.id];
-        if (!user || user.role !== 'student' || user.room !== roomId) return;
-        const room = rooms[roomId];
-        if (!room?.speaking || room.speaking.studentId !== socket.id || room.speaking.status !== 'live') return;
-        user.camOn = !user.camOn;
-        io.to(roomId).emit('user-cam-update', { id: socket.id, camOn: user.camOn });
     });
 
     // ── 聊天消息 ──
