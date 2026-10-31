@@ -64,12 +64,14 @@ async function waitVideo(page, tries = 40) {
   return false;
 }
 
-// 老师端：输入姓名 → 开始上课（直接弹系统共享框）→ 进课堂
+// 老师端：输入姓名 → 开始上课 → 选设备 → 进入课堂（弹系统共享框）→ 进大厅
 async function teacherGoLive(page) {
   await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForTimeout(400);
   await page.fill('input[placeholder="例如：李老师"]', '测试老师');
   await page.click('text=开始上课');
+  await page.waitForTimeout(500);
+  await page.click('text=进入课堂');
   await page.waitForSelector('.video-stage', { timeout: 8000 });
   await page.waitForTimeout(900);
 }

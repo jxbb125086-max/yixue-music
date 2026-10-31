@@ -42,17 +42,82 @@
         <div class="entry-field">
           <label class="field-label">您的姓名 <span class="field-tip">学员将看到</span></label>
           <el-input v-model="teacherNameInput" placeholder="例如：李老师" maxlength="12" size="large"
-            @keyup.enter="enterClass" />
+            @keyup.enter="enterPrep" />
         </div>
-        <el-button class="btn-primary entry-btn" size="large" @click="enterClass">开始上课</el-button>
+        <el-button class="btn-primary entry-btn" size="large" @click="enterPrep">开始上课</el-button>
         <div class="entry-steps">
           <div class="step"><i>1</i><span>输入姓名</span></div>
-          <div class="step"><i>2</i><span>开始上课</span></div>
+          <div class="step"><i>2</i><span>选设备</span></div>
+          <div class="step"><i>3</i><span>进入课堂</span></div>
         </div>
       </div>
     </main>
 
-    <!-- ═══ ② 上课中 ═══ -->
+    <!-- ═══ ② 课前准备 ═══ -->
+    <main v-else-if="stage === 'prep'" class="prep">
+      <div class="prep-card card">
+        <h2 class="prep-title">准备好，就开始了</h2>
+        <p class="prep-sub">花三十秒检查设备，上课后也能随时改</p>
+
+        <div class="field">
+          <div class="field-label">🎤 麦克风 <span class="field-tip">学生听您说话、弹琴</span></div>
+          <div class="field-row">
+            <el-select v-model="selectedMic" placeholder="选择麦克风" class="grow" @change="onMicChange">
+              <el-option v-for="d in audioDevices.mics" :key="d.deviceId"
+                :label="d.label || '麦克风 ' + (audioDevices.mics.indexOf(d)+1)" :value="d.deviceId" />
+            </el-select>
+            <div class="vol-bar"><div class="vol-fill" :style="{ width: micVolume + '%' }"></div></div>
+            <span class="vol-val">{{ micVolume }}%</span>
+            <el-button @click="testMic" :loading="testingMic">试听</el-button>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-label">🔊 扬声器 <span class="field-tip">您听学员说话</span></div>
+          <el-select v-model="selectedSpeaker" placeholder="选择扬声器" class="grow" @change="onSpeakerChange">
+            <el-option v-for="d in audioDevices.speakers" :key="d.deviceId"
+              :label="d.label || '扬声器 ' + (audioDevices.speakers.indexOf(d)+1)" :value="d.deviceId" />
+          </el-select>
+        </div>
+
+        <div class="field">
+          <div class="field-label">🎹 声音模式</div>
+          <div class="mode-cards">
+            <div class="mode-card" :class="{ active: isMusicMode }" @click="setMusicMode(true)">
+              <b>钢琴音质</b>
+              <span>不加工、原样传输，弹琴音色最好</span>
+            </div>
+            <div class="mode-card" :class="{ active: !isMusicMode }" @click="setMusicMode(false)">
+              <b>说话音质</b>
+              <span>降噪更清晰，适合讲话多的时候</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 移动端老师：没有屏幕共享，用摄像头作为视频源 -->
+        <div v-if="mobileTeacher" class="field">
+          <div class="field-label">📷 视频源 <span class="field-tip">移动端用摄像头代替屏幕共享</span></div>
+          <div class="mode-cards">
+            <div class="mode-card" :class="{ active: !camSourceOn }" @click="!camSourceOn && startCamSource()">
+              <b>开启摄像头源</b>
+              <span>用后置摄像头作为画面，学员可看到你</span>
+            </div>
+            <div class="mode-card" :class="{ active: camSourceOn }" @click="camSourceOn && stopCamSource()">
+              <b>关闭摄像头源</b>
+              <span>停止向学员传输画面</span>
+            </div>
+          </div>
+          <div v-if="camSourceOn" class="cam-source-preview">
+            <video ref="camSourcePreview" autoplay playsinline muted></video>
+          </div>
+        </div>
+
+        <el-button class="btn-primary start-btn" size="large" @click="startClass">进入课堂</el-button>
+        <p class="prep-tip">💡 桌面端：共享屏幕（教学排版台）；移动端：开启摄像头作为视频源</p>
+      </div>
+    </main>
+
+    <!-- ═══ ③ 上课中 ═══ -->
     <main v-else class="live" ref="liveRef">
       <div class="live-main" ref="mainRef">
         <!-- 舞台：教学排版采集进来是 16:9，这里就固定 16:9，画面刚好铺满不留黑边 -->
@@ -197,7 +262,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 // 生产模式（前后端同端口部署）用同源连接；vite 开发模式(5173)才需要指定后端地址
 const SERVER_URL = import.meta.env && import.meta.env.DEV ? 'http://localhost:3000' : undefined
 
-// ── 流程状态：entry(姓名) → live(上课中) ──
+// ── 流程状态：entry(姓名) → prep(设备) → live(上课中) ──
 const stage = ref('entry')
 const teacherNameInput = ref('')
 const teacherName = ref('')
@@ -253,6 +318,7 @@ const selectedMic = ref('')
 const selectedSpeaker = ref('')
 const micVolume = ref(0)
 const isMusicMode = ref(localStorage.getItem('mc_audio_mode') !== 'voice')
+const testingMic = ref(false)
 
 // 网络 & 媒体
 let socket = null
@@ -472,6 +538,7 @@ function micConstraints() {
     }
     return { audio: { ...base, echoCancellation: true, noiseSuppression: true, autoGainControl: true } }
 }
+function setMusicMode(v) { if (isMusicMode.value !== v) toggleAudioMode() }
 function toggleAudioMode() {
     isMusicMode.value = !isMusicMode.value
     localStorage.setItem('mc_audio_mode', isMusicMode.value ? 'music' : 'voice')
@@ -522,6 +589,34 @@ function stopVolumeDetection() {
     if (micSource) { micSource.disconnect(); micSource = null }
     if (audioContext) { audioContext.close().catch(() => { }); audioContext = null }
     micVolume.value = 0
+}
+
+async function testMic() {
+    testingMic.value = true
+    try {
+        const ts = await navigator.mediaDevices.getUserMedia(micConstraints())
+        const ctx = new (window.AudioContext || window.webkitAudioContext)()
+        const src = ctx.createMediaStreamSource(ts)
+        const ana = ctx.createAnalyser(); ana.fftSize = 2048
+        src.connect(ana)
+        const buf = new Uint8Array(ana.fftSize)
+        let hasSound = false
+        const iv = setInterval(() => {
+            ana.getByteTimeDomainData(buf)
+            let sum = 0
+            for (let i = 0; i < buf.length; i++) { const x = (buf[i] - 128) / 128; sum += x * x }
+            if (Math.sqrt(sum / buf.length) * 400 > 0.05) hasSound = true
+        }, 100)
+        setTimeout(() => {
+            clearInterval(iv); ctx.close()
+            ts.getTracks().forEach(t => t.stop())
+            testingMic.value = false
+            ElMessage.success(hasSound ? '✅ 麦克风正常' : '⚠️ 未检测到声音，请检查麦克风')
+        }, 2000)
+    } catch (e) {
+        ElMessage.error('测试失败: ' + e.message)
+        testingMic.value = false
+    }
 }
 
 function onMicChange() {
@@ -697,7 +792,7 @@ window.addEventListener('message', e => {
         if (pianoWaiter) { clearTimeout(pianoWaiter.timer); const w = pianoWaiter; pianoWaiter = null; w.resolve(false) }
     }
 })
-// 点「开始上课」时自动连接排版台（不再预先选卡片）：先打开排版台标签页拿画布
+// 连接排版台拿画布令牌（进设备页时预连一次，点「进入课堂」时若还没拿到再连）：打开排版台标签页，
 // CropTarget，随后弹出的系统共享框里选「钢琴教学排版台」标签页即可自动裁到画布。
 // 排版台没开着也不要紧：令牌等不到就按整页共享走，绝不挡上课。
 function beginPianoHandshake() {
@@ -715,11 +810,14 @@ function beginPianoHandshake() {
 }
 
 // ── 流程 ──
-function enterClass() {
+function enterPrep() {
     const name = teacherNameInput.value.trim()
     if (!name) { ElMessage.warning('请先输入您的姓名'); return }
     teacherName.value = name
-    startClass()
+    stage.value = 'prep'
+    // 提前把排版台标签页打开、令牌拿到手：等点「进入课堂」弹系统框时就不用再开，
+    // 也避免开标签页和弹系统框挤在同一次点击里互相干扰
+    beginPianoHandshake()
 }
 
 async function startClass() {
@@ -815,7 +913,7 @@ async function startClass() {
         stream.getVideoTracks().forEach(t => t.addEventListener('ended', () => {
             if (isRecording.value) stopRecording()
             streamReady.value = false
-            stage.value = 'entry'
+            stage.value = 'prep'
             isClassStarted.value = false
             if (classTimer) { clearInterval(classTimer); classTimer = null }
             ElMessage.warning('屏幕共享已停止')
@@ -1066,7 +1164,31 @@ onBeforeUnmount(() => {
   display: inline-flex; align-items: center; justify-content: center; font-size: .75rem; font-weight: 600;
 }
 
-/* ═══ ② 上课中 ═══
+/* ═══ ② 课前准备 ═══ */
+.prep { flex: 1; display: flex; align-items: flex-start; justify-content: center; padding: 2.4rem 1.2rem; overflow-y: auto; }
+.prep-card { width: 100%; max-width: 36rem; padding: 2.2rem; }
+.prep-title { font-size: 1.45rem; font-weight: 600; margin: 0 0 .3rem; }
+.prep-sub { color: var(--text-2); font-size: .9rem; margin: 0 0 2rem; }
+.field { margin-bottom: 1.6rem; }
+.field-row { display: flex; align-items: center; gap: .8rem; }
+.grow { flex: 1; min-width: 0; }
+.mode-cards { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+.mode-card {
+  border: 1px solid var(--line-2); border-radius: var(--r-md); padding: 1rem 1.1rem;
+  cursor: pointer; transition: border-color .15s, background .15s; display: flex; flex-direction: column; gap: .3rem;
+}
+.mode-card:hover { border-color: var(--gold-line); }
+.mode-card.active { border: 1.5px solid var(--gold); background: var(--gold-soft); }
+.mode-card b { font-size: 1.02rem; }
+.mode-card span { font-size: .8rem; color: var(--text-2); line-height: 1.5; }
+.mode-card.active span { color: #D9C39A; }
+.start-btn { width: 100%; height: 3.4rem; font-size: 1.15rem; margin-top: .6rem; }
+.prep-tip {
+  text-align: center; color: var(--text-3); font-size: .82rem; line-height: 1.7;
+  margin: 1.2rem 0 0; padding: .8rem 1rem; background: rgba(255,255,255,.03); border-radius: var(--r-md);
+}
+
+/* ═══ ③ 上课中 ═══
    主列宽度由 JS 锁成「画面宽度」，右栏 flex 吃掉所有剩余宽度 —— 任何窗口尺寸都不会
    在画面和右栏之间留下空白（画面是 16:9，扁窗口下会被高度卡住而比整列窄）。 */
 .live {
@@ -1254,6 +1376,10 @@ onBeforeUnmount(() => {
 /* ═══ 公屏 ═══ */
 .chat-card { flex: 1; min-height: 15rem; }
 
+/* 摄像头源本地预览（老师移动端） */
+.cam-source-preview { margin-top: .8rem; border-radius: var(--r-md); overflow: hidden; border: 1px solid rgba(168,120,255,.4); }
+.cam-source-preview video { display: block; width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #05070A; }
+
 .chat-scroll { flex: 1; overflow-y: auto; min-height: 0; padding: .2rem; -webkit-overflow-scrolling: touch; }
 .chat-empty { color: var(--text-3); font-size: .85rem; text-align: center; padding: 2rem .5rem; }
 .chat-input-row { display: flex; gap: .5rem; margin-top: .8rem; flex-shrink: 0; align-items: center; }
@@ -1301,6 +1427,7 @@ onBeforeUnmount(() => {
   .strip-select { width: 7.5rem; }
   .student-actions .el-button { padding: .4rem .6rem; font-size: .78rem; }
   .chat-card { min-height: 12rem; }
+  .mode-cards { grid-template-columns: 1fr; }
   /* 手机上顶栏太挤：只留「学生链接」标签和复制按钮，URL 由标题浮层看 */
   .topbar-link { margin: 0 .5rem; padding: .22rem .26rem .22rem .6rem; }
   .tl-url { display: none; }
@@ -1317,8 +1444,9 @@ onBeforeUnmount(() => {
   .rail-card { padding: .7rem .9rem; }
   .chat-card { min-height: 8rem; }
   .rail-card:not(.chat-card) { max-height: 30vh; }
-  .entry { padding: 1rem; }
+  .entry, .prep { padding: 1rem; }
   .entry-card { padding: 1.4rem 1.2rem; }
+  .prep-card { padding: 1.2rem; }
   .entry-steps { margin-top: 1rem; padding-top: 1rem; }
 }
 </style>
