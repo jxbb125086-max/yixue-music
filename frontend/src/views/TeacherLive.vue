@@ -516,7 +516,10 @@ function playStudentAudio(id) {
     const s = studentStreams[id]
     if (!s) return
     let a = studentAudios[id]
-    if (!a) { a = new Audio(); a.autoplay = true; studentAudios[id] = a }
+    if (!a) {
+        a = new Audio(); a.autoplay = true; studentAudios[id] = a
+        if (selectedSpeaker.value && typeof a.setSinkId === 'function') a.setSinkId(selectedSpeaker.value).catch(() => { })
+    }
     if (a.srcObject !== s) a.srcObject = s
     a.play().catch(() => {})
 }
@@ -532,19 +535,32 @@ function stopStudentAudio(id) {
 
 // ── 音频设备 ──
 function micConstraints() {
-    const base = selectedMic.value ? { deviceId: selectedMic.value } : {}
+    const base = selectedMic.value ? { deviceId: { exact: selectedMic.value } } : {}
     if (isMusicMode.value) {
-        return { audio: { ...base, echoCancellation: false, noiseSuppression: false, autoGainControl: false } }
+        // 音乐模式只关降噪和自动增益（那两个会吃钢琴的音色与强弱），回声消除必须留着：
+        // 学员的声音从老师扬声器放出来会被麦克风录回去，学员就会听见自己的回声
+        return { audio: { ...base, echoCancellation: true, noiseSuppression: false, autoGainControl: false } }
     }
     return { audio: { ...base, echoCancellation: true, noiseSuppression: true, autoGainControl: true } }
 }
+/* 取麦克风流：指定的设备已拔掉时 exact 约束会直接失败，回退到默认设备，别让整堂课没声 */
+async function getMicStream() {
+    try { return await navigator.mediaDevices.getUserMedia(micConstraints()) }
+    catch (e) {
+        if (e && (e.name === 'OverconstrainedError' || e.name === 'NotFoundError') && selectedMic.value) {
+            const c = micConstraints(); delete c.audio.deviceId
+            return await navigator.mediaDevices.getUserMedia(c)
+        }
+        throw e
+    }
+}
 function setMusicMode(v) { if (isMusicMode.value !== v) toggleAudioMode() }
-function toggleAudioMode() {
+async function toggleAudioMode() {
     isMusicMode.value = !isMusicMode.value
     localStorage.setItem('mc_audio_mode', isMusicMode.value ? 'music' : 'voice')
     ElMessage.success(isMusicMode.value ? '🎵 已切换钢琴音质（保真）' : '🗣️ 已切换说话音质（降噪）')
-    if (teacherMicStream) { teacherMicStream.getTracks().forEach(t => t.stop()); teacherMicStream = null }
-    startTeacherMicDetection()
+    // 模式变了约束就变了：重新取流并热换进课堂（旧版只换了检测流，课上其实没生效）
+    try { applyMicStreamToClass(await getMicStream()) } catch (e) { console.warn('模式切换重取麦克风失败', e) }
 }
 
 async function getAudioDevices() {
@@ -561,9 +577,39 @@ async function getAudioDevices() {
 
 async function startTeacherMicDetection() {
     try {
-        teacherMicStream = await navigator.mediaDevices.getUserMedia(micConstraints())
+        teacherMicStream = await getMicStream()
         startVolumeDetection(teacherMicStream)
     } catch (e) { console.error('[老师麦克风] 获取失败:', e) }
+}
+
+/* 把一条新麦克风流接进当前状态：音量检测改用新流；上课中把每个学员连接的
+   音频发送轨直接换成新轨（replaceTrack，不用重协商），peerStream 同步更新——
+   这样课中切麦克风/切声音模式立刻生效（旧版只换检测流，学员听到的还是旧设备/旧轨道） */
+function applyMicStreamToClass(s) {
+    if (teacherMicStream && teacherMicStream !== s) teacherMicStream.getTracks().forEach(t => t.stop())
+    teacherMicStream = s
+    startVolumeDetection(s)
+    const newTrack = s.getAudioTracks()[0]
+    if (!newTrack || !peerStream) return
+    const oldTrack = peerStream.getAudioTracks()[0]
+    if (!oldTrack) {
+        // 开课时没拿到麦克风、peerStream 里还没有音频轨：给现有连接补一条
+        peerStream.addTrack(newTrack)
+        Object.values(peers).forEach(p => { if (p && !p.destroyed) { try { p.addTrack(newTrack, peerStream) } catch (e) { } } })
+        micStream = s
+        return
+    }
+    if (oldTrack === newTrack) { micStream = s; return }
+    if (!oldTrack.enabled) newTrack.enabled = false   // 静音状态延续到新轨
+    Object.values(peers).forEach(p => {
+        if (!p || p.destroyed || !p._pc) return
+        const sender = p._pc.getSenders().find(x => x.track && x.track.kind === 'audio')
+        if (sender) sender.replaceTrack(newTrack).catch(() => { })
+    })
+    peerStream.removeTrack(oldTrack)
+    peerStream.addTrack(newTrack)
+    oldTrack.stop()
+    micStream = s
 }
 
 function startVolumeDetection(mediaStream) {
@@ -594,7 +640,7 @@ function stopVolumeDetection() {
 async function testMic() {
     testingMic.value = true
     try {
-        const ts = await navigator.mediaDevices.getUserMedia(micConstraints())
+        const ts = await getMicStream()
         const ctx = new (window.AudioContext || window.webkitAudioContext)()
         const src = ctx.createMediaStreamSource(ts)
         const ana = ctx.createAnalyser(); ana.fftSize = 2048
@@ -619,23 +665,22 @@ async function testMic() {
     }
 }
 
-function onMicChange() {
-    if (teacherMicStream) { teacherMicStream.getTracks().forEach(t => t.stop()); teacherMicStream = null }
-    startTeacherMicDetection()
-    if (stream) {
-        const old = stream.getAudioTracks()[0]
-        if (old) old.stop()
-        navigator.mediaDevices.getUserMedia(micConstraints())
-            .then(newStream => { stream.addTrack(newStream.getAudioTracks()[0]); ElMessage.success('麦克风已切换') })
-            .catch(() => ElMessage.error('切换失败'))
-    }
+async function onMicChange() {
+    try {
+        applyMicStreamToClass(await getMicStream())
+        ElMessage.success('麦克风已切换')
+    } catch (e) { ElMessage.error('切换失败') }
 }
 function onSpeakerChange() {
+    // 老师真正听到的声音走 studentAudios（学员连线声）和本地预览 videoRef，两边都要切
+    const sink = selectedSpeaker.value
+    let ok = false
     if (videoRef.value && typeof videoRef.value.setSinkId === 'function') {
-        videoRef.value.setSinkId(selectedSpeaker.value)
-            .then(() => ElMessage.success('扬声器已切换'))
-            .catch(() => ElMessage.warning('切换失败'))
+        videoRef.value.setSinkId(sink).then(() => ElMessage.success('扬声器已切换')).catch(() => ElMessage.warning('切换失败'))
+        ok = true
     }
+    Object.values(studentAudios).forEach(a => { if (a && typeof a.setSinkId === 'function') a.setSinkId(sink).catch(() => { }) })
+    if (!ok && !Object.keys(studentAudios).length) ElMessage.warning('当前浏览器不支持切换输出设备')
 }
 
 // ── 录制 ──
@@ -828,7 +873,7 @@ async function startClass() {
             ElMessage.error('无法开启摄像头，移动端需要摄像头才能开课')
             return
         }
-        try { micStream = await navigator.mediaDevices.getUserMedia(micConstraints()) }
+        try { micStream = await getMicStream() }
         catch (e) { console.warn('麦克风获取失败', e); micStream = null }
 
         peerStream = new MediaStream([
@@ -842,10 +887,11 @@ async function startClass() {
             // 桌面端：屏幕共享 + 麦克风。先顺手连排版台画布（系统共享框弹出前打开它，
             // 框里就能选到排版台标签页，令牌也正好对应那个标签页）
             const pianoP = beginPianoHandshake()
-            const screenAudio = selectedMic.value ? false : { systemAudio: 'include' }
+            // 不抓系统声音：发给学员的只有麦克风轨，抓了系统声只会让本地预览把学员的
+            // 声音再放出来一遍、加重回声；peerStream 本来也不用这条轨
             stream = await navigator.mediaDevices.getDisplayMedia({
                 video: { cursor: 'hidden', frameRate: 15 },
-                audio: screenAudio
+                audio: false
             })
             // 排版台画布：等令牌最多 2.5 秒（超时按整页共享走）；裁失败自动回退整页画面
             if (pianoP) await Promise.race([pianoP, new Promise(r => setTimeout(r, 2500))])
@@ -862,7 +908,7 @@ async function startClass() {
                 }
             }
             streamReady.value = true
-            try { micStream = await navigator.mediaDevices.getUserMedia(micConstraints()) }
+            try { micStream = await getMicStream() }
             catch (e) { console.warn('麦克风获取失败，学生可能听不到声音', e); micStream = null }
 
             peerStream = new MediaStream([

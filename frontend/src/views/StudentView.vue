@@ -333,11 +333,16 @@ function unwatchLiveLayout() {
 // 退出后视频被暂停、还可能被搬离播放框，只能手动点播放才能恢复。
 function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null }
 
+/* stage-locked 反映「任一全屏中」：这个类会把顶栏/右栏/音频条全藏起来（见 CSS），
+   全屏时只剩画面本身——否则沉浸式下这些 UI 会从画面边缘露出来压住讲课内容 */
+function syncStageLock() {
+    document.documentElement.classList.toggle('stage-locked', immersive.value || nativeFs.value)
+}
 function setImmersive(on) {
     const next = !!on
     if (immersive.value === next) return
     immersive.value = next
-    document.documentElement.classList.toggle('stage-locked', next)
+    syncStageLock()
     if (next) lockLandscape()
     else { unlockOrientation(); resumeVideoSoon(); nextTick(layoutLive) }
 }
@@ -434,6 +439,7 @@ function bindVideoGuards() {
 function onVisibility() { if (!document.hidden) resumeVideoSoon() }
 function onFullscreenChange() {
     nativeFs.value = !!fsElement()
+    syncStageLock()
     if (!nativeFs.value) unlockOrientation()
     resumeVideoSoon()   // ← 关键：进出全屏都立刻续播
     nextTick(layoutLive)
@@ -500,10 +506,26 @@ async function getAudioDevices() {
         await startMicDetection()
     } catch (e) { console.error('获取设备失败', e) }
 }
+function stuMicConstraints() {
+    const dev = selectedMic.value ? { deviceId: { exact: selectedMic.value } } : {}
+    // 学员是纯人声：回声消除/降噪/自动增益全开——不然老师的声音从学员扬声器出来
+    // 会被学员麦克风原样录回去，老师听见自己的回声、严重时还会来回激荡啸叫
+    return { audio: { ...dev, echoCancellation: true, noiseSuppression: true, autoGainControl: true } }
+}
+/* 取麦克风流：指定的设备已拔掉时 exact 约束会直接失败，回退到默认设备 */
+async function getStuMicStream() {
+    try { return await navigator.mediaDevices.getUserMedia(stuMicConstraints()) }
+    catch (e) {
+        if (e && (e.name === 'OverconstrainedError' || e.name === 'NotFoundError') && selectedMic.value) {
+            const c = stuMicConstraints(); delete c.audio.deviceId
+            return await navigator.mediaDevices.getUserMedia(c)
+        }
+        throw e
+    }
+}
 async function startMicDetection() {
     try {
-        const constraints = selectedMic.value ? { audio: { deviceId: selectedMic.value } } : { audio: true }
-        micStream = await navigator.mediaDevices.getUserMedia(constraints)
+        micStream = await getStuMicStream()
         startVolumeDetection(micStream)
     } catch (e) { console.error('[麦克风检测] 失败:', e) }
 }
@@ -530,10 +552,28 @@ function stopVolumeDetection() {
     if (audioContext) { audioContext.close().catch(() => { }); audioContext = null }
     micVolume.value = 0
 }
-function onMicChange() {
-    if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null }
-    startMicDetection()
-    ElMessage.info('麦克风已切换')
+async function onMicChange() {
+    try {
+        const s = await getStuMicStream()
+        const old = micStream
+        micStream = s
+        startVolumeDetection(s)
+        // 连线中切换：把连接里的音频发送轨直接换成新轨（旧版只换了检测流，
+        // 还把旧轨停掉——老师那边就再也听不到声音了，等于切换没生效）
+        if (peer && !peer.destroyed && speakState.value === 'live') {
+            const newTrack = s.getAudioTracks()[0]
+            const sender = peer._pc?.getSenders?.().find(x => x.track && x.track.kind === 'audio')
+            let swapped = false
+            if (sender && newTrack) { try { await sender.replaceTrack(newTrack); swapped = true } catch (e) { } }
+            if (!swapped) {
+                try { if (old) peer.removeStream(old) } catch (e) { }
+                try { peer.addStream(s) } catch (e) { }
+            }
+            if (!micOn.value) s.getAudioTracks().forEach(t => { t.enabled = false })   // 静音状态延续
+        }
+        if (old && old !== s) old.getTracks().forEach(t => t.stop())
+        ElMessage.success('麦克风已切换')
+    } catch (e) { ElMessage.error('切换失败') }
 }
 function onSpeakerChange() {
     if (videoRef.value && typeof videoRef.value.setSinkId === 'function') {
@@ -690,6 +730,7 @@ onBeforeUnmount(() => {
     if (wideMq) wideMq.removeEventListener('change', onWideChange)
     if (fsElement()) { try { (document.exitFullscreen || document.webkitExitFullscreen).call(document) } catch (e) { } }
     setImmersive(false)
+    document.documentElement.classList.remove('stage-locked')
     unlockOrientation()
     unwatchLiveLayout()
     disconnectAll()
@@ -808,6 +849,17 @@ onBeforeUnmount(() => {
 }
 .fs-btn:hover { color: var(--gold); border-color: var(--gold-line); background: rgba(10,14,20,.92); }
 .fs-btn.on { color: var(--gold); border-color: var(--gold-line); }
+
+/* 全屏（原生或沉浸式）期间，课堂的其它 UI 一律藏起来，只剩画面本身：
+   顶栏是 sticky 定位，沉浸式下会从画面边缘露出来——横屏时它正好压在画面左侧，
+   把讲课内容挡住一条。这里在 stage-locked 期间把它们全部 display:none */
+html.stage-locked .topbar,
+html.stage-locked .live-rail,
+html.stage-locked .audio-bar,
+html.stage-locked .connect-zone { display: none !important; }
+html.stage-locked .student { background: #000; }
+html.stage-locked .live { padding: 0; gap: 0; }
+html.stage-locked .live-main { gap: 0; }
 
 /* 全屏：两种模式共用「铺满视口」的样式
    ① 浏览器全屏 → :fullscreen  ② CSS 沉浸式 → .immersive（iPhone / 应用内浏览器） */
