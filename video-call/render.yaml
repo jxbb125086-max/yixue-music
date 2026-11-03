@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: piano-call
+    runtime: node
+    rootDir: video-call
+    buildCommand: npm install
+    startCommand: npm start
+    plan: free
