@@ -73,7 +73,6 @@
     <div class="ctl-wrap"><button class="ctl" id="btnMic">🎤</button><span>静音</span></div>
     <div class="ctl-wrap"><button class="ctl" id="btnCam">📷</button><span>摄像头</span></div>
     <div class="ctl-wrap"><button class="ctl" id="btnFlip">🔄</button><span>翻转</span></div>
-    <div class="ctl-wrap"><button class="ctl mode" id="btnMode">🎹 钢琴</button><span>音质模式</span></div>
     <div class="ctl-wrap"><button class="ctl hang" id="btnHang">📞</button><span>挂断</span></div>
   </div>
 </div>
@@ -86,8 +85,7 @@ const params = new URLSearchParams(location.search);
 let roomCode = (params.get("room") || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12);
 let socket = null, pc = null, localStream = null;
 let initiator = false, makingOffer = false, polite = true;
-let audioMode = "piano";            // piano: EC开/NS关/AGC关 + Opus 高码率立体声；voice: 三件套全开
-let facing = ("ontouchstart" in window) ? "environment" : "user";
+let facing = "user";  // 默认自拍（前置）摄像头
 let micOn = true, camOn = true, callTimer = null, callStartAt = 0;
 const pendingCandidates = [];
 
@@ -138,8 +136,9 @@ $("btnEnter").onclick = () => enterCall();
 
 /* ---------------- 媒体 ---------------- */
 function audioConstraints() {
-  if (audioMode === "piano") return { echoCancellation: true, noiseSuppression: false, autoGainControl: false, channelCount: 2 };
-  return { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+  // 固定平衡配置：回声消除开（防回声）；降噪/自动增益关（这两项最伤琴声）；
+  // 人声在正常房间里依然清晰，琴声细节完整保留。
+  return { echoCancellation: true, noiseSuppression: false, autoGainControl: false, channelCount: 2 };
 }
 async function getMedia() {
   const stream = await navigator.mediaDevices.getUserMedia({
@@ -148,9 +147,8 @@ async function getMedia() {
   });
   return stream;
 }
-// 钢琴模式：给 Opus 写上立体声 + 高码率，琴声才不糊
+// 给 Opus 写上立体声 + 高码率，琴声才不糊、人声也更透
 function mungeSDP(sdp) {
-  if (audioMode !== "piano") return sdp;
   const lines = sdp.split("\r\n");
   let audioIdx = -1, opusPt = null;
   for (let i = 0; i < lines.length; i++) {
@@ -300,22 +298,6 @@ $("btnFlip").onclick = async () => {
     $("localVideo").srcObject = localStream;
     camOn = true; $("btnCam").classList.remove("off"); $("btnCam").textContent = "📷";
   } catch (e) { console.warn("flip failed", e); }
-};
-$("btnMode").onclick = async () => {
-  audioMode = audioMode === "piano" ? "voice" : "piano";
-  $("btnMode").textContent = audioMode === "piano" ? "🎹 钢琴" : "🗣 说话";
-  try {
-    const s = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints() });
-    const track = s.getAudioTracks()[0];
-    const old = localStream.getAudioTracks()[0];
-    const sender = pc && pc.getSenders().find(x => x.track && x.track.kind === "audio");
-    if (sender) await sender.replaceTrack(track);
-    localStream.removeTrack(old); old.stop();
-    localStream.addTrack(track);
-    track.enabled = micOn;
-    // 码率参数在 SDP 里，换轨道不会改码率：请发起方重新协商一次
-    if (pc) { if (initiator) negotiate(); else socket.emit("signal", { type: "renegotiate" }); }
-  } catch (e) { console.warn("mode switch failed", e); }
 };
 $("btnHang").onclick = () => {
   try { pc && pc.close(); socket && socket.disconnect(); } catch (e) {}
