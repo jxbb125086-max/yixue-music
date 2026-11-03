@@ -16,32 +16,47 @@
   .big-btn { border:none; border-radius:999px; padding:16px 42px; font-size:18px; font-weight:600; color:#131a26;
              background:linear-gradient(180deg,#ffd98a,#f0b95a); box-shadow:0 8px 24px rgba(240,185,90,.35); cursor:pointer; }
   .big-btn:active { transform:scale(.97); }
-  .ghost-btn { border:1px solid #3a4560; }
   .link-box { display:none; width:100%; max-width:420px; background:#131a26; border:1px solid #2a3560; border-radius:14px; padding:14px; }
   .link-box .url { word-break:break-all; font-size:13px; color:#ffd98a; background:#0b0e13; border-radius:8px; padding:10px; margin:10px 0; }
   .row { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
   .sub-btn { border:1px solid #3a4560; background:#1a2334; color:#f2f4f8; border-radius:999px; padding:11px 22px; font-size:15px; cursor:pointer; }
   .err { color:#ff8a8a; font-size:14px; min-height:20px; }
   .code { font-size:30px; letter-spacing:6px; color:#ffd98a; font-weight:700; }
-  /* ---------- 通话页 ---------- */
-  #viewCall { position:fixed; inset:0; display:none; background:#000; }
-  #remoteVideo { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; background:#000; }
-  #localVideo { position:absolute; right:12px; top:calc(12px + env(safe-area-inset-top)); width:26%; max-width:150px; aspect-ratio:3/4; object-fit:cover;
-                border-radius:14px; border:2px solid rgba(255,255,255,.35); background:#111; z-index:5; }
-  #statusPill { position:absolute; left:50%; transform:translateX(-50%); top:calc(12px + env(safe-area-inset-top)); z-index:6;
-                background:rgba(10,14,20,.65); backdrop-filter:blur(6px); padding:8px 16px; border-radius:999px; font-size:13px; color:#dbe4f2; white-space:nowrap; }
+  /* ---------- 通话页：分屏 ---------- */
+  #viewCall { position:fixed; inset:0; display:none; background:#05070a; flex-direction:column; }
+  #panes { flex:1; display:flex; flex-direction:column; min-height:0; }
+  @media (min-width:820px) and (min-aspect-ratio:1/1) { #panes { flex-direction:row; } }
+  .pane { position:relative; flex:1 1 0; min-height:0; min-width:0; background:#000; overflow:hidden; }
+  .pane + .pane { border-top:2px solid #1c2536; }
+  @media (min-width:820px) and (min-aspect-ratio:1/1) { .pane + .pane { border-top:none; border-left:2px solid #1c2536; } }
+  @media (min-width:820px) { .pane .pane-btns { top:54px; } }
+  .pane video { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#000; }
+  #localVideo.mirror { transform:scaleX(-1); }
+  .pane .tag { position:absolute; left:10px; top:10px; z-index:4; background:rgba(10,14,20,.6); backdrop-filter:blur(6px);
+               padding:5px 12px; border-radius:999px; font-size:12px; color:#dbe4f2; }
+  .pane .pane-btns { position:absolute; right:10px; top:10px; z-index:4; display:flex; gap:8px; }
+  .pane-btn { border:1px solid rgba(255,255,255,.25); background:rgba(10,14,20,.6); backdrop-filter:blur(6px); color:#fff;
+              border-radius:999px; padding:7px 14px; font-size:13px; cursor:pointer; }
+  .pane-btn.back { display:none; }
+  /* 最大化：被点的 pane 独占，另一 pane 隐藏；该 pane 显示「返回」 */
+  #viewCall.focus .pane { display:none; }
+  #viewCall.focus .pane.maxed { display:block; }
+  #viewCall.focus .pane.maxed .pane-btn.max { display:none; }
+  #viewCall.focus .pane.maxed .pane-btn.back { display:block; }
+  .pane .hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; z-index:3; color:#9fb0c9;
+                font-size:15px; text-align:center; padding:26px; line-height:1.8; pointer-events:none; }
+  #statusPill { position:absolute; left:50%; transform:translateX(-50%); top:calc(10px + env(safe-area-inset-top)); z-index:8;
+                background:rgba(10,14,20,.65); backdrop-filter:blur(6px); padding:7px 15px; border-radius:999px; font-size:13px; color:#dbe4f2; white-space:nowrap; }
   #statusPill .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#f0b95a; margin-right:7px; vertical-align:1px; }
   #statusPill.on .dot { background:#4ade80; }
-  .controls { position:absolute; left:0; right:0; bottom:calc(18px + env(safe-area-inset-bottom)); z-index:6; display:flex; justify-content:center; gap:12px; padding:0 10px; }
-  .ctl { width:58px; height:58px; border-radius:50%; border:none; font-size:23px; cursor:pointer; background:rgba(26,35,52,.85); color:#fff;
-         display:flex; align-items:center; justify-content:center; backdrop-filter:blur(6px); }
-  .ctl small { position:absolute; margin-top:78px; font-size:10px; color:#c8d4e8; }
+  .controls { position:relative; z-index:8; display:flex; justify-content:center; gap:14px; padding:12px 10px calc(14px + env(safe-area-inset-bottom));
+              background:#0b0e13; }
+  .ctl { width:56px; height:56px; border-radius:50%; border:none; font-size:22px; cursor:pointer; background:rgba(38,50,74,.95); color:#fff;
+         display:flex; align-items:center; justify-content:center; }
   .ctl-wrap { display:flex; flex-direction:column; align-items:center; gap:5px; }
   .ctl-wrap span { font-size:10px; color:#c8d4e8; }
   .ctl.off { background:#c0392b; }
-  .ctl.mode { width:auto; border-radius:999px; padding:0 18px; font-size:15px; font-weight:600; background:rgba(240,185,90,.92); color:#131a26; }
   .ctl.hang { background:#c0392b; transform:rotate(135deg); }
-  .waiting { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; z-index:3; color:#9fb0c9; font-size:15px; text-align:center; padding:30px; line-height:1.8; }
 </style>
 </head>
 <body>
@@ -65,10 +80,26 @@
 
 <!-- 通话页 -->
 <div id="viewCall">
-  <video id="remoteVideo" autoplay playsinline></video>
-  <video id="localVideo" autoplay playsinline muted></video>
-  <div class="waiting" id="waitingTip">等待对方加入…<br><span style="font-size:13px">把链接发给对方，对方点开就能进来</span></div>
   <div id="statusPill"><span class="dot"></span><span id="statusText">正在连接…</span></div>
+  <div id="panes">
+    <div class="pane" id="paneLocal">
+      <video id="localVideo" autoplay playsinline muted></video>
+      <div class="tag">我</div>
+      <div class="pane-btns">
+        <button class="pane-btn max" data-max="paneLocal">⛶ 最大化</button>
+        <button class="pane-btn back">↩ 返回</button>
+      </div>
+    </div>
+    <div class="pane" id="paneRemote">
+      <video id="remoteVideo" autoplay playsinline></video>
+      <div class="tag">对方</div>
+      <div class="hint" id="waitingTip">等待对方加入…<br><span style="font-size:13px">把链接发给对方，对方点开就能进来</span></div>
+      <div class="pane-btns">
+        <button class="pane-btn max" data-max="paneRemote">⛶ 最大化</button>
+        <button class="pane-btn back">↩ 返回</button>
+      </div>
+    </div>
+  </div>
   <div class="controls">
     <div class="ctl-wrap"><button class="ctl" id="btnMic">🎤</button><span>静音</span></div>
     <div class="ctl-wrap"><button class="ctl" id="btnCam">📷</button><span>摄像头</span></div>
@@ -134,6 +165,24 @@ $("btnCopy").onclick = async () => {
 };
 $("btnEnter").onclick = () => enterCall();
 
+/* ---------------- 分屏：最大化 / 返回 ---------------- */
+document.querySelectorAll(".pane-btn.max").forEach(btn => {
+  btn.onclick = () => {
+    const pane = $(btn.dataset.max);
+    document.querySelectorAll(".pane").forEach(p => p.classList.remove("maxed"));
+    pane.classList.add("maxed");
+    $("viewCall").classList.add("focus");
+    tryPlayAll();
+  };
+});
+document.querySelectorAll(".pane-btn.back").forEach(btn => {
+  btn.onclick = () => {
+    $("viewCall").classList.remove("focus");
+    document.querySelectorAll(".pane").forEach(p => p.classList.remove("maxed"));
+    tryPlayAll();
+  };
+});
+
 /* ---------------- 媒体 ---------------- */
 function audioConstraints() {
   // 固定平衡配置：回声消除开（防回声）；降噪/自动增益关（这两项最伤琴声）；
@@ -141,20 +190,18 @@ function audioConstraints() {
   return { echoCancellation: true, noiseSuppression: false, autoGainControl: false, channelCount: 2 };
 }
 async function getMedia() {
-  const stream = await navigator.mediaDevices.getUserMedia({
+  return navigator.mediaDevices.getUserMedia({
     video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } },
     audio: audioConstraints()
   });
-  return stream;
 }
 // 给 Opus 写上立体声 + 高码率，琴声才不糊、人声也更透
 function mungeSDP(sdp) {
   const lines = sdp.split("\r\n");
-  let audioIdx = -1, opusPt = null;
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].startsWith("m=audio")) { audioIdx = i; const m = lines[i].match(/(\d+)$/); }
-    const rtp = lines[i].match(/^a=rtpmap:(\d+) opus\/48000/);
-    if (rtp) opusPt = rtp[1];
+  let opusPt = null;
+  for (const line of lines) {
+    const rtp = line.match(/^a=rtpmap:(\d+) opus\/48000/);
+    if (rtp) { opusPt = rtp[1]; break; }
   }
   if (!opusPt) return sdp;
   const fmtp = "a=fmtp:" + opusPt + " minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1;maxaveragebitrate=256000;maxplaybackrate=48000;cbr=0";
@@ -169,6 +216,14 @@ function mungeSDP(sdp) {
   }
   return lines.join("\r\n");
 }
+// 移动端浏览器常拦截远端视频自动播放：主动 play，被拦时等下一次点按再试
+function tryPlay(video) {
+  if (!video || !video.srcObject) return;
+  const p = video.play();
+  if (p) p.catch(() => {});
+}
+function tryPlayAll() { tryPlay($("remoteVideo")); tryPlay($("localVideo")); }
+document.addEventListener("click", () => tryPlayAll(), true);
 
 /* ---------------- 通话 ---------------- */
 function setStatus(text, on) {
@@ -184,8 +239,10 @@ async function enterCall() {
     return;
   }
   $("viewHome").style.display = "none";
-  $("viewCall").style.display = "block";
+  $("viewCall").style.display = "flex";
   $("localVideo").srcObject = localStream;
+  $("localVideo").classList.toggle("mirror", facing === "user");
+  tryPlay($("localVideo"));
   try { await navigator.wakeLock.request("screen"); } catch (e) {}
   connectSignaling();
 }
@@ -202,7 +259,8 @@ function connectSignaling() {
   socket.on("peer-joined", () => { if (pc && initiator) negotiate(); });
   socket.on("peer-left", () => {
     $("waitingTip").style.display = "flex";
-    setStatus("对方已离开，等待重新加入…", false);
+    $("waitingTip").innerHTML = "对方已离开，等待重新加入…";
+    setStatus("对方已离开", false);
     stopTimer();
   });
   socket.on("signal", async (data) => {
@@ -240,12 +298,16 @@ function makePC() {
   localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
   pc.onicecandidate = e => { if (e.candidate) socket.emit("signal", { candidate: e.candidate }); };
   pc.ontrack = e => {
-    $("remoteVideo").srcObject = e.streams[0];
+    const rv = $("remoteVideo");
+    if (rv.srcObject !== e.streams[0]) rv.srcObject = e.streams[0];
     $("waitingTip").style.display = "none";
+    tryPlay(rv);
+    // 画面真正开始动才算到达：监听轨道静音/恢复，给用户明确反馈
+    e.track.onunmute = () => { $("waitingTip").style.display = "none"; tryPlay(rv); };
   };
   pc.oniceconnectionstatechange = () => {
     const st = pc.iceConnectionState;
-    if (st === "connected" || st === "completed") { setStatus("已接通", true); startTimer(); }
+    if (st === "connected" || st === "completed") { setStatus("已接通", true); startTimer(); tryPlayAll(); }
     else if (st === "disconnected") setStatus("连接不稳定…", false);
     else if (st === "failed") { setStatus("连接失败，重连中…", false); if (initiator) negotiate(true); }
   };
@@ -296,6 +358,8 @@ $("btnFlip").onclick = async () => {
     localStream.removeTrack(old); old.stop();
     localStream.addTrack(track);
     $("localVideo").srcObject = localStream;
+    $("localVideo").classList.toggle("mirror", facing === "user");
+    tryPlay($("localVideo"));
     camOn = true; $("btnCam").classList.remove("off"); $("btnCam").textContent = "📷";
   } catch (e) { console.warn("flip failed", e); }
 };
