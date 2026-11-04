@@ -83,6 +83,9 @@ select{background:#121419;border:1px solid #3a3f4d;color:var(--txt);border-radiu
       <button class="btn" id="btnStop">停止</button>
       <span class="sep"></span>
       <button class="btn" id="btnUndo">撤销</button>
+      <span class="sep"></span>
+      <button class="btn" id="btnSwapL">◀ 左移</button>
+      <button class="btn" id="btnSwapR">右移 ▶</button>
     </div>
     <div class="row">
       <button class="btn" id="btnTrim">保留选区</button>
@@ -459,6 +462,7 @@ var actx=new (window.AudioContext||window.webkitAudioContext)();
 var fac=new OfflineAudioContext(1,128,44100);
 var buf=null, bufVer=0, fileBase='audio', undoStack=[], sel={a:0,b:0};
 var clips=[], fadeInSec=0, fadeOutSec=0, clipSeq=0;
+var selClipId=0, ph=0, hoverEdge=null;
 var peaks=null, peaksW=0;
 var playing=null, rafId=0, loopOn=false;
 var masterOn=false, curPreset='universal', intensity=50, gainDb=0;
@@ -599,15 +603,28 @@ function draw(){
   if(clips.length){
     var sc=sortedClips();
     gx.fillStyle='rgba(255,255,255,0.05)'; gx.fillRect(0,0,w,16);
+    function grip(x, hot){
+      gx.fillStyle=hot? 'rgba(217,168,63,0.95)' : 'rgba(242,243,245,0.38)';
+      gx.fillRect(x-1.5, 16, 3, h-16);
+      gx.fillRect(x-5, 0, 10, 16);
+      gx.fillStyle=hot? '#14161a' : 'rgba(20,22,26,0.6)';
+      gx.fillRect(x-2.6, 4, 1.7, 8); gx.fillRect(x+0.9, 4, 1.7, 8);
+    }
     sc.forEach(function(cl, idx){
       var x0=cl.start/dur*w, x1=(cl.start+cl.len)/dur*w;
-      if(idx>0){ gx.fillStyle='rgba(242,243,245,0.55)'; gx.fillRect(x0-0.75, 16, 1.5, h-16); }
+      var isSel=(cl.id===selClipId);
+      if(isSel){ gx.fillStyle='rgba(217,168,63,0.10)'; gx.fillRect(x0, 16, Math.max(0, x1-x0), h-16); }
       if(idx<sc.length-1){ var n=sc[idx+1], ov=cl.start+cl.len-n.start;
         if(ov>0.001){ var ox=n.start/dur*w; gx.fillStyle='rgba(91,141,217,0.20)'; gx.fillRect(ox, 16, ov/dur*w, h-16); } }
-      gx.fillStyle='rgba(242,243,245,0.85)'; gx.font='10px sans-serif'; gx.textBaseline='middle';
+      var hotL=!!(hoverEdge&&((hoverEdge.cl===cl&&hoverEdge.m==='trimL')||(hoverEdge.b===cl&&hoverEdge.m==='bound')));
+      var hotR=!!(hoverEdge&&((hoverEdge.cl===cl&&hoverEdge.m==='trimR')||(hoverEdge.a===cl&&hoverEdge.m==='bound')));
+      grip(x0, hotL||isSel); grip(x1, hotR||isSel);
+      gx.fillStyle=isSel? '#d9a83f' : 'rgba(242,243,245,0.85)'; gx.font='10px sans-serif'; gx.textBaseline='middle';
       gx.fillText((idx+1)+'. '+cl.name, Math.min(x0+5, Math.max(0, w-40)), 8.5, Math.max(10, x1-x0-8));
     });
   }
+  if(buf){ var px=ph/dur*w; gx.fillStyle='#ff6b6b'; gx.fillRect(px-0.75, 0, 1.5, h);
+    gx.beginPath(); gx.moveTo(px-5, 0); gx.lineTo(px+5, 0); gx.lineTo(px, 7); gx.closePath(); gx.fill(); }
   var pp=playPos();
   if(pp>=0){ gx.fillStyle='#f2f3f5'; gx.fillRect(pp/dur*w,0,1.6,h); }
 }
@@ -632,6 +649,9 @@ function updReads(){
   $('btnCut').disabled=!has||selLen<=0.001||selLen>=buf.duration-0.001;
   $('btnFadeIn').disabled=!has; $('btnFadeOut').disabled=!has;
   $('btnUndo').disabled=!undoStack.length;
+  var sci=-1; if(selClipId){ var _sc=sortedClips(); for(var _i=0;_i<_sc.length;_i++) if(_sc[_i].id===selClipId){ sci=_i; break; } }
+  $('btnSwapL').disabled=!(sci>0);
+  $('btnSwapR').disabled=!(sci>=0&&sci<clips.length-1);
   $('btnExport').disabled=!has; $('abOrig').disabled=!has; $('abMaster').disabled=!has||!masterOn;
   updExpName();
 }
@@ -715,6 +735,16 @@ function trimClipRight(cl, newEnd){
   newEnd=Math.max(lo, Math.min(hi, newEnd));
   cl.len=newEnd-cl.start;
 }
+function selectedClip(){ for(var i=0;i<clips.length;i++) if(clips[i].id===selClipId) return clips[i]; return null; }
+function swapWith(cl, dir){
+  var sc=sortedClips(), idx=sc.indexOf(cl), j=idx+dir;
+  if(idx<0||j<0||j>=sc.length) return Promise.resolve(null);
+  pushUndo();
+  var nb=sc[j], base=Math.min(cl.start, nb.start);
+  var first=dir<0? cl:nb, second=dir<0? nb:cl;
+  first.start=base; second.start=base+first.len;
+  return refreshComposite();
+}
 
 /* selection + clip interaction */
 var drag=null;
@@ -735,30 +765,36 @@ function hitClip(t, th){
   }
   return null;
 }
+cv.addEventListener('contextmenu', function(e){ e.preventDefault(); });
 cv.addEventListener('pointerdown', function(e){
   if(!buf) return;
   var r=cv.getBoundingClientRect(), t=x2t(e), th=buf.duration*9/r.width;
   cv.setPointerCapture(e.pointerId);
+  if(e.button===2){ drag={m:'box'}; sel={a:t, b:t}; updReads(); draw(); return; }
+  if(e.button!==0) return;
   if(e.clientY-r.top>=24){
     var hit=hitClip(t, th);
-    if(hit){ pushUndo(); drag=hit; updReads(); draw(); return; }
+    if(hit){
+      selClipId=(hit.cl||hit.a).id;
+      if(hit.m==='move'){ pushUndo(); drag=hit; }
+      else { pushUndo(); drag=hit; }
+      updReads(); draw(); return;
+    }
   }
-  if(Math.abs(t-sel.a)<=th) drag={m:'a'};
-  else if(Math.abs(t-sel.b)<=th) drag={m:'b'};
-  else { drag={m:'new'}; sel={a:t,b:t}; }
-  updReads(); draw();
+  drag={m:'ph'}; ph=t; updReads(); draw();
 });
 cv.addEventListener('pointermove', function(e){
   if(!buf) return;
   var t=x2t(e), r=cv.getBoundingClientRect(), th=buf.duration*9/r.width;
   if(!drag){
     var hit=(e.clientY-r.top>=24)? hitClip(t, th):null;
-    cv.style.cursor=hit? (hit.m==='move'? 'grab':'ew-resize') : 'text';
+    var key=hit? (hit.m+':'+(hit.cl||hit.a).id):'';
+    if(key!==(hoverEdge&&hoverEdge._k||'')){ hoverEdge=hit; if(hoverEdge) hoverEdge._k=key; draw(); }
+    cv.style.cursor=hit? (hit.m==='move'? 'grab':'ew-resize') : 'default';
     return;
   }
-  if(drag.m==='a') sel.a=Math.min(t, sel.b);
-  else if(drag.m==='b') sel.b=Math.max(t, sel.a);
-  else if(drag.m==='new'){ sel.a=Math.min(drag.a0!=null? drag.a0:(drag.a0=t), t); sel.b=Math.max(drag.a0, t); }
+  if(drag.m==='box'){ sel.a=Math.min(drag.a0!=null? drag.a0:(drag.a0=t), t); sel.b=Math.max(drag.a0, t); }
+  else if(drag.m==='ph') ph=t;
   else if(drag.m==='move') moveClip(drag.cl, t-drag.off);
   else if(drag.m==='trimL') trimClipLeft(drag.cl, t);
   else if(drag.m==='trimR') trimClipRight(drag.cl, t);
@@ -989,6 +1025,7 @@ function exportBlob(opts){
   var srcP=useM? getMastered():Promise.resolve(buf);
   return srcP.then(function(b){
     if(!b) throw new Error('no audio loaded');
+    if(buf&&sel.b-sel.a>0.001&&sel.b-sel.a<buf.duration-0.001) b=sliceBuf(b, sel.a, sel.b);
     return format==='mp3'? encodeMP3(b, kbps):encodeWAV(b);
   });
 }
@@ -1017,7 +1054,7 @@ function loadFiles(fl){
     undoStack=[];
     if(first&&wasEmpty) fileBase=(first.name||'audio').replace(/\.[^.]+$/,'')||'audio';
     $('fname').textContent=clips.map(function(c){ return c.name; }).join(' \u00b7 ');
-    sel={a:0, b:tlDuration()};
+    sel={a:0, b:0}; ph=0; selClipId=0;
     return refreshComposite().then(function(){
       return {duration:tlDuration(), channels:buf? buf.numberOfChannels:0, sampleRate:buf? buf.sampleRate:0, clips:clips.length};
     });
@@ -1032,11 +1069,13 @@ window.addEventListener('dragover', function(e){ e.preventDefault(); $('drop').s
 window.addEventListener('dragleave', function(e){ if(!e.relatedTarget) $('drop').style.display='none'; });
 window.addEventListener('drop', function(e){ e.preventDefault(); $('drop').style.display='none'; if(e.dataTransfer.files.length) loadFiles(e.dataTransfer.files).catch(function(){}); });
 $('btnAll').addEventListener('click', function(){ if(!buf) return; sel={a:0,b:buf.duration}; updReads(); draw(); });
-$('btnPlay').addEventListener('click', function(){ if(buf) startPlay(buf, 0, buf.duration, false, 'main'); });
+$('btnPlay').addEventListener('click', function(){ if(buf) startPlay(buf, ph, buf.duration, false, 'main'); });
 $('btnPlaySel').addEventListener('click', function(){ if(buf) startPlay(buf, sel.a, sel.b, loopOn, 'main'); });
 $('btnLoop').addEventListener('click', function(){ loopOn=!loopOn; updateTransport(); });
 $('btnStop').addEventListener('click', stopPlay);
 $('btnUndo').addEventListener('click', doUndo);
+$('btnSwapL').addEventListener('click', function(){ var cl=selectedClip(); if(cl) swapWith(cl, -1); });
+$('btnSwapR').addEventListener('click', function(){ var cl=selectedClip(); if(cl) swapWith(cl, 1); });
 $('btnTrim').addEventListener('click', trimSel);
 $('btnCut').addEventListener('click', cutOutSel);
 $('btnFadeIn').addEventListener('click', function(){ fade('in', $('fiSec').value); });
@@ -1189,6 +1228,12 @@ window.AC={
   moveClip:function(i, t){ var cl=sortedClips()[i]; if(!cl) return Promise.resolve(null); pushUndo(); moveClip(cl, t); return refreshComposite(); },
   trimClip:function(i, side, t){ var cl=sortedClips()[i]; if(!cl) return Promise.resolve(null); pushUndo(); if(side==='L') trimClipLeft(cl, t); else trimClipRight(cl, t); return refreshComposite(); },
   refresh:refreshComposite,
+  selectClip:function(i){ var cl=sortedClips()[i]; selClipId=cl? cl.id:0; updReads(); draw(); return selClipId; },
+  selectedIndex:function(){ var sc=sortedClips(); for(var i=0;i<sc.length;i++) if(sc[i].id===selClipId) return i; return -1; },
+  swapClip:function(i, dir){ var cl=sortedClips()[i]; if(!cl) return Promise.resolve(null); return swapWith(cl, dir); },
+  setPlayhead:function(t){ ph=buf? Math.max(0, Math.min(buf.duration, t)):0; draw(); },
+  playhead:function(){ return ph; },
+  getSel:function(){ return {a:sel.a, b:sel.b}; },
   reset:function(){ clips=[]; fadeInSec=0; fadeOutSec=0; undoStack=[]; sel={a:0,b:0}; return refreshComposite(); },
   zipStore:zipStore
 };
