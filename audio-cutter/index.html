@@ -92,10 +92,8 @@ select{background:#121419;border:1px solid #3a3f4d;color:var(--txt);border-radiu
       <button class="btn" id="btnTrim">保留选区</button>
       <button class="btn" id="btnCut">删除选区</button>
       <span class="sep"></span>
-      <span class="lab">淡入</span><input type="number" id="fiSec" value="1" min="0" step="0.1"><span class="lab">秒</span>
-      <button class="btn" id="btnFadeIn">应用淡入</button>
-      <span class="lab">淡出</span><input type="number" id="foSec" value="1" min="0" step="0.1"><span class="lab">秒</span>
-      <button class="btn" id="btnFadeOut">应用淡出</button>
+      <span class="lab">淡入</span><input type="range" id="fiRange" min="0" max="60" step="0.1" value="0"><span class="val" id="fiVal">0 秒</span>
+      <span class="lab">淡出</span><input type="range" id="foRange" min="0" max="60" step="0.1" value="0"><span class="val" id="foVal">0 秒</span>
     </div>
   </div>
 
@@ -655,8 +653,10 @@ function updReads(){
   $('btnAll').disabled=!has; $('btnPlay').disabled=!has; $('btnPlaySel').disabled=!has||selLen<=0.001;
   $('btnTrim').disabled=!has||selLen<=0.001||selLen>=buf.duration-0.001;
   $('btnCut').disabled=!has||selLen<=0.001||selLen>=buf.duration-0.001;
-  $('btnFadeIn').disabled=!has; $('btnFadeOut').disabled=!has;
-  $('btnFadeIn').classList.toggle('on', has&&fadeInSec>0.001); $('btnFadeOut').classList.toggle('on', has&&fadeOutSec>0.001);
+  $('fiRange').disabled=!has; $('foRange').disabled=!has;
+  var fmax=Math.max(10, Math.ceil(tlDuration())); $('fiRange').max=fmax; $('foRange').max=fmax;
+  $('fiRange').value=fadeInSec; $('foRange').value=fadeOutSec;
+  $('fiVal').textContent=fmtFade(fadeInSec); $('foVal').textContent=fmtFade(fadeOutSec);
   $('btnUndo').disabled=!undoStack.length;
   var sci=-1; if(selClipId){ var _sc=sortedClips(); for(var _i=0;_i<_sc.length;_i++) if(_sc[_i].id===selClipId){ sci=_i; break; } }
   $('btnSwapL').disabled=!(sci>0);
@@ -1104,8 +1104,30 @@ $('btnSwapL').addEventListener('click', function(){ var cl=selectedClip(); if(cl
 $('btnSwapR').addEventListener('click', function(){ var cl=selectedClip(); if(cl) swapWith(cl, 1); });
 $('btnTrim').addEventListener('click', trimSel);
 $('btnCut').addEventListener('click', cutOutSel);
-$('btnFadeIn').addEventListener('click', function(){ fade('in', $('fiSec').value); });
-$('btnFadeOut').addEventListener('click', function(){ fade('out', $('foSec').value); });
+var fiSnap=null, foSnap=null, fadeTimer=0;
+function fmtFade(v){ return (Math.round(v*10)/10)+' 秒'; }
+function fadeSlide(which, v){
+  if(!buf) return;
+  v=Math.min(Math.max(0, parseFloat(v)||0), tlDuration());
+  if(which==='in'){ fadeInSec=v; $('fiVal').textContent=fmtFade(v); }
+  else { fadeOutSec=v; $('foVal').textContent=fmtFade(v); }
+  draw();
+  clearTimeout(fadeTimer);
+  fadeTimer=setTimeout(function(){ refreshComposite(); }, 160);
+}
+function fadeUndoPush(snap, which){
+  if(!snap) return;
+  var cur=(which==='in')? fadeInSec:fadeOutSec, old=(which==='in')? snap.fi:snap.fo;
+  if(Math.abs(cur-old)>0.0005){ undoStack.push(snap); if(undoStack.length>10) undoStack.shift(); }
+}
+$('fiRange').addEventListener('pointerdown', function(){ fiSnap=snapState(); });
+$('fiRange').addEventListener('focus', function(){ if(!fiSnap) fiSnap=snapState(); });
+$('fiRange').addEventListener('input', function(){ fadeSlide('in', this.value); });
+$('fiRange').addEventListener('change', function(){ fadeUndoPush(fiSnap, 'in'); fiSnap=null; updReads(); });
+$('foRange').addEventListener('pointerdown', function(){ foSnap=snapState(); });
+$('foRange').addEventListener('focus', function(){ if(!foSnap) foSnap=snapState(); });
+$('foRange').addEventListener('input', function(){ fadeSlide('out', this.value); });
+$('foRange').addEventListener('change', function(){ fadeUndoPush(foSnap, 'out'); foSnap=null; updReads(); });
 var presetBox=$('presets');
 Object.keys(PRESETS).forEach(function(k){
   var d=document.createElement('div');
