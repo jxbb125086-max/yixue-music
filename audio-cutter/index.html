@@ -112,15 +112,6 @@ select{background:#121419;border:1px solid #3a3f4d;color:var(--txt);border-radiu
       <span class="lab">母带响度</span><span class="val" id="mLufs">—</span>
     </div>
     <div class="presets" id="presets" style="margin-top:12px"></div>
-    <div class="row" style="margin-top:14px">
-      <span class="lab">强度</span>
-      <input type="range" id="inten" min="0" max="100" step="1" value="50">
-      <span class="val" id="intenVal">50</span>
-      <span class="sep"></span>
-      <span class="lab">输入增益</span>
-      <input type="range" id="gain" min="-12" max="12" step="0.5" value="0">
-      <span class="val" id="gainVal">0 dB</span>
-    </div>
   </div>
 
   <div class="card">
@@ -465,7 +456,7 @@ var clips=[], fadeInSec=0, fadeOutSec=0, clipSeq=0;
 var selClipId=0, ph=0, hoverEdge=null;
 var peaks=null, peaksW=0;
 var playing=null, rafId=0, loopOn=false;
-var masterOn=false, curPreset='universal', intensity=50, gainDb=0;
+var masterOn=false, curPreset='universal';
 var mCache=null, mKey='', renderSeq=0, mTimer=0;
 var abMode='';
 
@@ -902,52 +893,48 @@ function doUndo(){
 
 /* ---------------- mastering ---------------- */
 var PRESETS={
-  universal:{label:'通用', eq:[1.0,0,0.8,1.2],  thr:-18, ratio:2.0, drive:0,    width:1.05, wet:0,    target:-14},
-  fire:     {label:'火力', eq:[2.5,0.5,1.5,1.0], thr:-16, ratio:3.0, drive:0.15, width:1.0,  wet:0,    target:-13},
-  clarity:  {label:'清澈', eq:[-0.5,-1.0,1.5,2.5],thr:-20, ratio:1.6, drive:0,    width:1.1,  wet:0,    target:-14},
-  tape:     {label:'磁带', eq:[1.5,0.5,-0.5,-1.5],thr:-19, ratio:2.2, drive:0.35, width:0.95, wet:0,    target:-14.5},
-  natural:  {label:'自然', eq:[0.5,0,0.3,0.5],   thr:-21, ratio:1.5, drive:0,    width:1.0,  wet:0,    target:-14.5},
-  spatial:  {label:'空间', eq:[0.8,0,0.8,1.5],   thr:-20, ratio:1.8, drive:0,    width:1.3,  wet:0.12, target:-14.5},
-  cinematic:{label:'电影', eq:[2.0,0,1.0,1.8],   thr:-17, ratio:2.6, drive:0.28, width:1.2,  wet:0.05, target:-13.5}
+  universal:{label:'通用', hp:25, eq:[1.2,-0.4,0.8,1.2],   thr:-18, ratio:2.0, atk:0.010, rel:0.24, knee:18, drive:0.06, width:1.05, wet:0,    decay:1.8, target:-14,   ceil:-1},
+  fire:     {label:'火力', hp:30, eq:[3.0,0.8,2.2,1.8],    thr:-14, ratio:4.0, atk:0.003, rel:0.12, knee:12, drive:0.30, width:1.12, wet:0,    decay:1.8, target:-11,   ceil:-0.8},
+  clarity:  {label:'清澈', hp:35, eq:[-1.5,-2.0,1.5,4.0],  thr:-20, ratio:1.6, atk:0.012, rel:0.28, knee:24, drive:0.02, width:1.18, wet:0,    decay:1.8, target:-14,   ceil:-1},
+  tape:     {label:'磁带', hp:20, eq:[2.0,1.0,-1.0,-3.5],  thr:-19, ratio:2.4, atk:0.020, rel:0.30, knee:30, drive:0.50, width:0.85, wet:0,    decay:1.8, target:-14.5, ceil:-1},
+  natural:  {label:'自然', hp:20, eq:[0.4,0,0.3,0.4],      thr:-24, ratio:1.3, atk:0.020, rel:0.35, knee:30, drive:0,    width:1.0,  wet:0,    decay:1.8, target:-16,   ceil:-1},
+  spatial:  {label:'空间', hp:25, eq:[0.8,0,0.8,2.0],      thr:-20, ratio:1.8, atk:0.012, rel:0.30, knee:24, drive:0,    width:1.45, wet:0.18, decay:2.8, target:-14.5, ceil:-1},
+  cinematic:{label:'电影', hp:22, eq:[4.2,-0.5,0.6,-1.2],  thr:-16, ratio:3.0, atk:0.015, rel:0.40, knee:20, drive:0.18, width:1.30, wet:0.10, decay:3.4, target:-15.5, ceil:-1}
 };
-function makeIR(sr){
-  var len=Math.round(1.8*sr), ir=fac.createBuffer(2, len, sr);
+function makeIR(sr, decay){
+  var len=Math.round(decay*sr), ir=fac.createBuffer(2, len, sr);
   for(var c=0;c<2;c++){ var d=ir.getChannelData(c); for(var i=0;i<len;i++){ var t=i/len; d[i]=(Math.random()*2-1)*Math.pow(1-t,2.6); } }
   return ir;
 }
-function renderMaster(srcBuf, presetName, inten, gDb){
+function renderMaster(srcBuf, presetName){
   var P=PRESETS[presetName]||PRESETS.universal;
   var sr=srcBuf.sampleRate, nCh=srcBuf.numberOfChannels;
   var off=new OfflineAudioContext(nCh, srcBuf.length, sr);
   var src=off.createBufferSource(); src.buffer=srcBuf;
-  var ig=off.createGain(); ig.gain.value=db2lin(gDb);
-  var hpF=off.createBiquadFilter(); hpF.type='highpass'; hpF.frequency.value=25; hpF.Q.value=0.7071;
-  var s=0.3+inten/100*1.3;
+  var hpF=off.createBiquadFilter(); hpF.type='highpass'; hpF.frequency.value=P.hp; hpF.Q.value=0.7071;
   var eqDefs=[['lowshelf',100,0],['peaking',300,0.9],['peaking',2800,0.9],['highshelf',9000,0]];
   var node=src, i;
-  node.connect(ig); node=ig; node.connect(hpF); node=hpF;
+  node.connect(hpF); node=hpF;
   for(i=0;i<4;i++){
     var f=off.createBiquadFilter(); f.type=eqDefs[i][0]; f.frequency.value=eqDefs[i][1];
     if(eqDefs[i][2]) f.Q.value=eqDefs[i][2];
-    f.gain.value=P.eq[i]*s;
+    f.gain.value=P.eq[i];
     node.connect(f); node=f;
   }
-  var driveEff=P.drive*(inten/50);
-  if(driveEff>0.001){
-    var ws=off.createWaveShaper(), N=1024, curve=new Float32Array(N), g=1+driveEff*4, norm=Math.tanh(g);
+  if(P.drive>0.001){
+    var ws=off.createWaveShaper(), N=1024, curve=new Float32Array(N), g=1+P.drive*4, norm=Math.tanh(g);
     for(i=0;i<N;i++){ var x=i/(N-1)*2-1; curve[i]=Math.tanh(g*x)/norm; }
     ws.curve=curve; ws.oversample='2x';
     node.connect(ws); node=ws;
   }
   var comp=off.createDynamicsCompressor();
-  comp.threshold.value=P.thr; comp.ratio.value=P.ratio; comp.attack.value=0.01; comp.release.value=0.24; comp.knee.value=18;
+  comp.threshold.value=P.thr; comp.ratio.value=P.ratio; comp.attack.value=P.atk; comp.release.value=P.rel; comp.knee.value=P.knee;
   node.connect(comp); node=comp;
-  var wEff=1+(P.width-1)*(inten/50);
-  if(nCh>=2&&Math.abs(wEff-1)>0.001){
+  if(nCh>=2&&Math.abs(P.width-1)>0.001){
     var split=off.createChannelSplitter(2);
     var mgL=off.createGain(), mgR=off.createGain(), sgL=off.createGain(), sgR=off.createGain();
     mgL.gain.value=0.5; mgR.gain.value=0.5; sgL.gain.value=0.5; sgR.gain.value=-0.5;
-    var mid=off.createGain(), side=off.createGain(); side.gain.value=wEff;
+    var mid=off.createGain(), side=off.createGain(); side.gain.value=P.width;
     var oL1=off.createGain(), oL2=off.createGain(), oR1=off.createGain(), oR2=off.createGain();
     oR2.gain.value=-1;
     var merger=off.createChannelMerger(2);
@@ -958,27 +945,30 @@ function renderMaster(srcBuf, presetName, inten, gDb){
     oL1.connect(merger,0,0); oL2.connect(merger,0,0); oR1.connect(merger,0,1); oR2.connect(merger,0,1);
     node=merger;
   }
-  var wetEff=P.wet*(inten/50);
-  if(wetEff>0.001){
+  if(P.wet>0.001){
     var dry=off.createGain(); node.connect(dry); dry.connect(off.destination);
-    var conv=off.createConvolver(); conv.buffer=makeIR(sr);
-    var wet=off.createGain(); wet.gain.value=wetEff;
+    var conv=off.createConvolver(); conv.buffer=makeIR(sr, P.decay);
+    var wet=off.createGain(); wet.gain.value=P.wet;
     node.connect(conv); conv.connect(wet); wet.connect(off.destination);
   } else {
     node.connect(off.destination);
   }
   src.start(0);
   return off.startRendering().then(function(rendered){
-    var target=P.target+(inten-50)/50*1.5;
-    var meas=measureLUFS(rendered);
-    var mg=db2lin(isFinite(meas)? (target-meas):0);
     var chans=[], c;
-    for(c=0;c<nCh;c++){
-      var rd=rendered.getChannelData(c), d=new Float32Array(rendered.length);
-      for(var j=0;j<rd.length;j++) d[j]=rd[j]*mg;
-      chans.push(d);
+    for(c=0;c<nCh;c++) chans.push(new Float32Array(rendered.getChannelData(c)));
+    for(var pass=0;pass<2;pass++){
+      var tmp=makeBuf(nCh, rendered.length, sr);
+      for(c=0;c<nCh;c++) tmp.getChannelData(c).set(chans[c]);
+      var meas=measureLUFS(tmp);
+      if(!isFinite(meas)) break;
+      var err=P.target-meas;
+      if(pass>0&&Math.abs(err)<0.1) break;
+      var mg2=db2lin(err);
+      for(c=0;c<nCh;c++){ var d=chans[c]; for(var j=0;j<d.length;j++) d[j]*=mg2; }
+      applyLimiter(chans, sr, P.ceil);
     }
-    applyLimiter(chans, sr, -1);
+    applyLimiter(chans, sr, P.ceil);
     var out=makeBuf(nCh, rendered.length, sr);
     for(c=0;c<nCh;c++) out.getChannelData(c).set(chans[c]);
     return out;
@@ -986,11 +976,11 @@ function renderMaster(srcBuf, presetName, inten, gDb){
 }
 function getMastered(){
   if(!buf) return Promise.resolve(null);
-  var key=bufVer+'|'+curPreset+'|'+intensity+'|'+gainDb;
+  var key=bufVer+'|'+curPreset;
   if(mCache&&mKey===key) return Promise.resolve(mCache);
   var seq=++renderSeq;
   $('mLufs').textContent='渲染中…';
-  return renderMaster(buf, curPreset, intensity, gainDb).then(function(out){
+  return renderMaster(buf, curPreset).then(function(out){
     if(seq===renderSeq){ mCache=out; mKey=key; $('mLufs').textContent=fmtLUFS(measureLUFS(out)); }
     return out;
   }).catch(function(err){ if(seq===renderSeq) $('mLufs').textContent='—'; throw err; });
@@ -1114,8 +1104,6 @@ $('mOn').addEventListener('change', function(){
   if(!masterOn){ stopPlay(); $('mLufs').textContent='—'; }
   updReads(); scheduleMaster();
 });
-$('inten').addEventListener('input', function(){ intensity=parseInt($('inten').value,10); $('intenVal').textContent=intensity; scheduleMaster(); });
-$('gain').addEventListener('input', function(){ gainDb=parseFloat($('gain').value); $('gainVal').textContent=gainDb+' dB'; scheduleMaster(); });
 $('abOrig').addEventListener('click', function(){ if(!buf) return; abMode='orig'; startPlay(buf, sel.a, sel.b, false, 'ab'); });
 $('abMaster').addEventListener('click', function(){
   if(!buf||!masterOn) return;
@@ -1189,14 +1177,14 @@ function addBatchFiles(fl){
 }
 function batchZip(files, opts){
   opts=opts||{};
-  var preset=opts.preset||'universal', inten=(opts.intensity==null? 50:opts.intensity), gDb=opts.gainDb||0;
+  var preset=opts.preset||'universal';
   var format=opts.format||'wav', kbps=opts.kbps||192;
   var out=[], used={}, chain=Promise.resolve();
   files.forEach(function(file, idx){
     chain=chain.then(function(){
       if(opts.onstep) opts.onstep(idx, '处理中');
       return file.arrayBuffer().then(function(ab){ return actx.decodeAudioData(ab); }).then(function(dec){
-        return renderMaster(dec, preset, inten, gDb);
+        return renderMaster(dec, preset);
       }).then(function(m){
         var blob=(format==='mp3')? encodeMP3(m, kbps) : encodeWAV(m);
         return blob.arrayBuffer();
@@ -1206,7 +1194,7 @@ function batchZip(files, opts){
         while(used[nm]){ nm=base+'_master ('+(k++)+').'+format; }
         used[nm]=1;
         out.push({name:nm, data:new Uint8Array(ab2)});
-        if(opts.onstep) opts.onstep(idx, '完成');
+        if(opts.onstep) opts.onstep(idx, '完成 · '+fmtLUFS(measureLUFS(m)));
       }).catch(function(){ if(opts.onstep) opts.onstep(idx, '失败'); });
     });
   });
@@ -1219,11 +1207,11 @@ $('btnBatch').addEventListener('click', function(){
   if(!batchItems.length) return;
   var files=batchItems.map(function(it){ return it.file; });
   $('btnBatch').disabled=true;
-  batchZip(files, { preset:curPreset, intensity:intensity, gainDb:gainDb, format:$('fmtSel').value, kbps:parseInt($('kbpsSel').value,10)||192,
+  batchZip(files, { preset:curPreset, format:$('fmtSel').value, kbps:parseInt($('kbpsSel').value,10)||192,
     onstep:function(i, s){ if(batchItems[i]) batchItems[i].status=s; drawBatch(); batchStat('处理中 '+(i+1)+' / '+files.length); }
   }).then(function(zip){
     download(zip, '批量母带.zip');
-    batchStat('完成 · '+files.length+' 个文件');
+    batchStat('完成 · '+files.length+' 个文件 · 统一 '+fmtLUFS(PRESETS[curPreset].target));
   }).catch(function(){ batchStat('导出失败'); }).then(function(){ updBatchBtns(); });
 });
 
@@ -1238,7 +1226,7 @@ window.AC={
   fadeOut:function(sec){ return fade('out', sec); },
   undo:doUndo,
   measureLUFS:measureLUFS,
-  master:function(opts){ opts=opts||{}; if(!buf) return Promise.reject(new Error('no audio loaded')); return renderMaster(buf, opts.preset||'universal', opts.intensity==null?50:opts.intensity, opts.gainDb||0); },
+  master:function(opts){ opts=opts||{}; if(!buf) return Promise.reject(new Error('no audio loaded')); return renderMaster(buf, opts.preset||'universal'); },
   exportBlob:exportBlob,
   batchZip:batchZip,
   clips:function(){ return sortedClips().map(function(c){ return {name:c.name, start:c.start, len:c.len, srcOff:c.srcOff}; }); },
