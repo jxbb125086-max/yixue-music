@@ -761,6 +761,7 @@ function hitClip(t, th){
   for(i=0;i<sc.length;i++){
     var cl=sc[i];
     if(Math.abs(t-cl.start)<=th) return {m:'trimL', cl:cl};
+    if(Math.abs(t-(cl.start+cl.len))<=th) return {m:'trimR', cl:cl};
     if(t>cl.start&&t<cl.start+cl.len) return {m:'move', cl:cl, off:t-cl.start};
   }
   return null;
@@ -776,8 +777,7 @@ cv.addEventListener('pointerdown', function(e){
     var hit=hitClip(t, th);
     if(hit){
       selClipId=(hit.cl||hit.a).id;
-      if(hit.m==='move'){ pushUndo(); drag=hit; }
-      else { pushUndo(); drag=hit; }
+      drag=hit; drag.moved=false; drag.downT=t;
       updReads(); draw(); return;
     }
   }
@@ -795,17 +795,25 @@ cv.addEventListener('pointermove', function(e){
   }
   if(drag.m==='box'){ sel.a=Math.min(drag.a0!=null? drag.a0:(drag.a0=t), t); sel.b=Math.max(drag.a0, t); }
   else if(drag.m==='ph') ph=t;
-  else if(drag.m==='move') moveClip(drag.cl, t-drag.off);
-  else if(drag.m==='trimL') trimClipLeft(drag.cl, t);
-  else if(drag.m==='trimR') trimClipRight(drag.cl, t);
-  else if(drag.m==='bound'){ trimClipRight(drag.a, t); trimClipLeft(drag.b, t); }
+  else if(drag.m==='move'||drag.m==='trimL'||drag.m==='trimR'||drag.m==='bound'){
+    if(!drag.moved){
+      if(Math.abs(t-drag.downT)<=buf.duration*0.002){ updReads(); draw(); return; }
+      drag.moved=true; pushUndo();
+    }
+    if(drag.m==='move') moveClip(drag.cl, t-drag.off);
+    else if(drag.m==='trimL') trimClipLeft(drag.cl, t);
+    else if(drag.m==='trimR') trimClipRight(drag.cl, t);
+    else { trimClipRight(drag.a, t); trimClipLeft(drag.b, t); }
+  }
   updReads(); draw();
 });
 function endDrag(){
   if(!drag) return;
   var wasClip=(drag.m==='move'||drag.m==='trimL'||drag.m==='trimR'||drag.m==='bound');
+  var wasClick=wasClip&&!drag.moved;
+  if(wasClick) ph=drag.downT;
   drag=null;
-  if(wasClip) refreshComposite(); else updReads();
+  if(wasClip&&!wasClick) refreshComposite(); else { updReads(); draw(); }
 }
 cv.addEventListener('pointerup', endDrag);
 cv.addEventListener('pointercancel', endDrag);
