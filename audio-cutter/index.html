@@ -92,8 +92,8 @@ select{background:#121419;border:1px solid #3a3f4d;color:var(--txt);border-radiu
       <button class="btn" id="btnTrim">保留选区</button>
       <button class="btn" id="btnCut">删除选区</button>
       <span class="sep"></span>
-      <span class="lab">淡入</span><input type="range" id="fiRange" min="0" max="60" step="0.1" value="0"><span class="val" id="fiVal">0 秒</span>
-      <span class="lab">淡出</span><input type="range" id="foRange" min="0" max="60" step="0.1" value="0"><span class="val" id="foVal">0 秒</span>
+      <span class="lab">淡入</span><input type="range" id="fiRange" min="0" max="10" step="0.1" value="0"><span class="val" id="fiVal">0 秒</span>
+      <span class="lab">淡出</span><input type="range" id="foRange" min="0" max="10" step="0.1" value="0"><span class="val" id="foVal">0 秒</span>
     </div>
   </div>
 
@@ -654,7 +654,7 @@ function updReads(){
   $('btnTrim').disabled=!has||selLen<=0.001||selLen>=buf.duration-0.001;
   $('btnCut').disabled=!has||selLen<=0.001||selLen>=buf.duration-0.001;
   $('fiRange').disabled=!has; $('foRange').disabled=!has;
-  var fmax=Math.max(10, Math.ceil(tlDuration())); $('fiRange').max=fmax; $('foRange').max=fmax;
+  var fmax=Math.min(10, Math.max(1, Math.ceil(tlDuration()))); $('fiRange').max=fmax; $('foRange').max=fmax;
   $('fiRange').value=fadeInSec; $('foRange').value=fadeOutSec;
   $('fiVal').textContent=fmtFade(fadeInSec); $('foVal').textContent=fmtFade(fadeOutSec);
   $('btnUndo').disabled=!undoStack.length;
@@ -1107,13 +1107,15 @@ $('btnCut').addEventListener('click', cutOutSel);
 var fiSnap=null, foSnap=null, fadeTimer=0;
 function fmtFade(v){ return (Math.round(v*10)/10)+' 秒'; }
 function fadeSlide(which, v){
-  if(!buf) return;
+  if(!buf) return null;
   v=Math.min(Math.max(0, parseFloat(v)||0), tlDuration());
+  var r=Math.round(v); if(Math.abs(v-r)<=0.15) v=r;
   if(which==='in'){ fadeInSec=v; $('fiVal').textContent=fmtFade(v); }
   else { fadeOutSec=v; $('foVal').textContent=fmtFade(v); }
   draw();
   clearTimeout(fadeTimer);
   fadeTimer=setTimeout(function(){ refreshComposite(); }, 160);
+  return v;
 }
 function fadeUndoPush(snap, which){
   if(!snap) return;
@@ -1122,11 +1124,11 @@ function fadeUndoPush(snap, which){
 }
 $('fiRange').addEventListener('pointerdown', function(){ fiSnap=snapState(); });
 $('fiRange').addEventListener('focus', function(){ if(!fiSnap) fiSnap=snapState(); });
-$('fiRange').addEventListener('input', function(){ fadeSlide('in', this.value); });
+$('fiRange').addEventListener('input', function(){ var av=fadeSlide('in', this.value); if(av!=null&&Math.abs(av-parseFloat(this.value))>0.001) this.value=av; });
 $('fiRange').addEventListener('change', function(){ fadeUndoPush(fiSnap, 'in'); fiSnap=null; updReads(); });
 $('foRange').addEventListener('pointerdown', function(){ foSnap=snapState(); });
 $('foRange').addEventListener('focus', function(){ if(!foSnap) foSnap=snapState(); });
-$('foRange').addEventListener('input', function(){ fadeSlide('out', this.value); });
+$('foRange').addEventListener('input', function(){ var av=fadeSlide('out', this.value); if(av!=null&&Math.abs(av-parseFloat(this.value))>0.001) this.value=av; });
 $('foRange').addEventListener('change', function(){ fadeUndoPush(foSnap, 'out'); foSnap=null; updReads(); });
 var presetBox=$('presets');
 Object.keys(PRESETS).forEach(function(k){
