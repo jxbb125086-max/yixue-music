@@ -16,6 +16,7 @@ h1{font-size:19px;margin:0;font-weight:600;letter-spacing:3px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px}
 .card h2{font-size:12px;margin:0 0 12px;color:var(--dim);font-weight:600;letter-spacing:4px}
 .btn{background:#262a34;border:1px solid #3a3f4d;color:var(--txt);padding:7px 14px;border-radius:8px;cursor:pointer;font-size:13px;line-height:1.25}
+.btn.on{border-color:var(--acc);color:var(--acc);background:var(--accdim)}
 .btn:hover{border-color:#5a6274}
 .btn:disabled{opacity:.38;cursor:default}
 .btn:disabled:hover{border-color:#3a3f4d}
@@ -585,6 +586,20 @@ function draw(){
     gx.fillRect(x, y0, 1, Math.max(1,y1-y0));
   }
   if(dur>buf.duration+0.001){ gx.fillStyle='rgba(0,0,0,0.30)'; gx.fillRect(buf.duration/dur*w, 0, w-buf.duration/dur*w, h); }
+  if(fadeInSec>0.001){
+    var fwx=Math.min(fadeInSec, buf.duration)/dur*w;
+    gx.fillStyle='rgba(0,0,0,0.38)';
+    gx.beginPath(); gx.moveTo(0,0); gx.lineTo(fwx,0); gx.lineTo(0,h); gx.closePath(); gx.fill();
+    gx.strokeStyle='#e8b64c'; gx.lineWidth=1.6;
+    gx.beginPath(); gx.moveTo(0,h-1); gx.lineTo(fwx,1); gx.stroke(); gx.lineWidth=1;
+  }
+  if(fadeOutSec>0.001){
+    var endX=buf.duration/dur*w, fox=(buf.duration-Math.min(fadeOutSec, buf.duration))/dur*w;
+    gx.fillStyle='rgba(0,0,0,0.38)';
+    gx.beginPath(); gx.moveTo(endX,0); gx.lineTo(fox,0); gx.lineTo(endX,h); gx.closePath(); gx.fill();
+    gx.strokeStyle='#e8b64c'; gx.lineWidth=1.6;
+    gx.beginPath(); gx.moveTo(fox,1); gx.lineTo(endX,h-1); gx.stroke(); gx.lineWidth=1;
+  }
   gx.fillStyle='rgba(0,0,0,0.52)';
   if(ax>0) gx.fillRect(0,0,ax,h);
   if(bx<w) gx.fillRect(bx,0,w-bx,h);
@@ -641,6 +656,7 @@ function updReads(){
   $('btnTrim').disabled=!has||selLen<=0.001||selLen>=buf.duration-0.001;
   $('btnCut').disabled=!has||selLen<=0.001||selLen>=buf.duration-0.001;
   $('btnFadeIn').disabled=!has; $('btnFadeOut').disabled=!has;
+  $('btnFadeIn').classList.toggle('on', has&&fadeInSec>0.001); $('btnFadeOut').classList.toggle('on', has&&fadeOutSec>0.001);
   $('btnUndo').disabled=!undoStack.length;
   var sci=-1; if(selClipId){ var _sc=sortedClips(); for(var _i=0;_i<_sc.length;_i++) if(_sc[_i].id===selClipId){ sci=_i; break; } }
   $('btnSwapL').disabled=!(sci>0);
@@ -878,9 +894,11 @@ function cutOutSel(){
 }
 function fade(which, sec){
   if(!buf) return Promise.resolve(null);
-  sec=Math.max(0, parseFloat(sec)||0); if(sec<=0) return Promise.resolve(null);
+  sec=Math.min(Math.max(0, parseFloat(sec)||0), tlDuration());
+  var cur=(which==='in')? fadeInSec:fadeOutSec;
+  if(Math.abs(sec-cur)<0.0005) return Promise.resolve(null);
   pushUndo();
-  if(which==='in') fadeInSec=Math.min(sec, tlDuration()); else fadeOutSec=Math.min(sec, tlDuration());
+  if(which==='in') fadeInSec=sec; else fadeOutSec=sec;
   return refreshComposite();
 }
 function doUndo(){
@@ -1235,6 +1253,7 @@ window.AC={
   trimClip:function(i, side, t){ var cl=sortedClips()[i]; if(!cl) return Promise.resolve(null); pushUndo(); if(side==='L') trimClipLeft(cl, t); else trimClipRight(cl, t); return refreshComposite(); },
   refresh:refreshComposite,
   viewDuration:viewDuration,
+  fades:function(){ return {i:fadeInSec, o:fadeOutSec}; },
   selectClip:function(i){ var cl=sortedClips()[i]; selClipId=cl? cl.id:0; updReads(); draw(); return selClipId; },
   selectedIndex:function(){ var sc=sortedClips(); for(var i=0;i<sc.length;i++) if(sc[i].id===selClipId) return i; return -1; },
   swapClip:function(i, dir){ var cl=sortedClips()[i]; if(!cl) return Promise.resolve(null); return swapWith(cl, dir); },
