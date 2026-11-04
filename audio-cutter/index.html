@@ -61,7 +61,7 @@ select{background:#121419;border:1px solid #3a3f4d;color:var(--txt);border-radiu
   <header>
     <h1>音频工坊</h1>
     <button class="btn pri" id="btnOpen">打开文件</button>
-    <input type="file" id="fileIn" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.aac" hidden>
+    <input type="file" id="fileIn" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.aac" multiple hidden>
     <span id="fname">未选择文件</span>
     <span id="meta"></span>
   </header>
@@ -129,11 +129,8 @@ select{background:#121419;border:1px solid #3a3f4d;color:var(--txt);border-radiu
       <select id="kbpsSel" disabled><option value="192">192 kbps</option><option value="256">256 kbps</option><option value="320">320 kbps</option></select>
       <button class="btn pri" id="btnExport">导出</button>
       <span id="expName" class="lab"></span>
-    </div>
-  </div>
-  <div class="card">
-    <h2>批量母带</h2>
-    <div class="row">
+      <span class="sep"></span>
+      <span class="lab">批量母带</span>
       <button class="btn" id="btnBatchAdd">添加文件</button>
       <input type="file" id="batchIn" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.aac" multiple hidden>
       <button class="btn pri" id="btnBatch" disabled>批量导出 ZIP</button>
@@ -141,20 +138,6 @@ select{background:#121419;border:1px solid #3a3f4d;color:var(--txt);border-radiu
       <span class="lab" id="batchStat"></span>
     </div>
     <div class="flist" id="batchList"></div>
-  </div>
-
-  <div class="card">
-    <h2>合并</h2>
-    <div class="row">
-      <button class="btn" id="btnMergeAdd">添加文件</button>
-      <input type="file" id="mergeIn" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.aac" multiple hidden>
-      <span class="lab">间隔</span><input type="number" id="gapSec" value="0" min="0" step="0.5"><span class="lab">秒</span>
-      <span class="lab">交叉融合</span><input type="number" id="xfadeSec" value="0" min="0" step="0.5"><span class="lab">秒</span>
-      <button class="btn pri" id="btnMerge" disabled>合并并载入</button>
-      <button class="btn" id="btnMergeClear" disabled>清空</button>
-      <span class="lab" id="mergeStat"></span>
-    </div>
-    <div class="flist" id="mergeList"></div>
   </div>
 </div>
 <div id="drop">松开导入</div>
@@ -475,6 +458,7 @@ var $=function(id){return document.getElementById(id);};
 var actx=new (window.AudioContext||window.webkitAudioContext)();
 var fac=new OfflineAudioContext(1,128,44100);
 var buf=null, bufVer=0, fileBase='audio', undoStack=[], sel={a:0,b:0};
+var clips=[], fadeInSec=0, fadeOutSec=0, clipSeq=0;
 var peaks=null, peaksW=0;
 var playing=null, rafId=0, loopOn=false;
 var masterOn=false, curPreset='universal', intensity=50, gainDb=0;
@@ -568,7 +552,8 @@ function cloneBuf(b){
   for(var c=0;c<b.numberOfChannels;c++) out.getChannelData(c).set(b.getChannelData(c));
   return out;
 }
-function pushUndo(){ if(!buf) return; undoStack.push(buf); if(undoStack.length>10) undoStack.shift(); }
+function snapState(){ return {clips:clips.map(function(c){ return {id:c.id, name:c.name, buf:c.buf, srcOff:c.srcOff, len:c.len, start:c.start}; }), fi:fadeInSec, fo:fadeOutSec}; }
+function pushUndo(){ if(!clips.length) return; undoStack.push(snapState()); if(undoStack.length>10) undoStack.shift(); }
 
 /* ---------------- waveform ---------------- */
 var cv=$('wave'), gx=cv.getContext('2d');
@@ -611,6 +596,18 @@ function draw(){
   gx.fillRect(Math.max(0,ax-3),0,6,14); gx.fillRect(Math.min(w-6,bx-3),0,6,14);
   gx.fillStyle='rgba(217,168,63,0.10)';
   gx.fillRect(ax,0,Math.max(0,bx-ax),h);
+  if(clips.length){
+    var sc=sortedClips();
+    gx.fillStyle='rgba(255,255,255,0.05)'; gx.fillRect(0,0,w,16);
+    sc.forEach(function(cl, idx){
+      var x0=cl.start/dur*w, x1=(cl.start+cl.len)/dur*w;
+      if(idx>0){ gx.fillStyle='rgba(242,243,245,0.55)'; gx.fillRect(x0-0.75, 16, 1.5, h-16); }
+      if(idx<sc.length-1){ var n=sc[idx+1], ov=cl.start+cl.len-n.start;
+        if(ov>0.001){ var ox=n.start/dur*w; gx.fillStyle='rgba(91,141,217,0.20)'; gx.fillRect(ox, 16, ov/dur*w, h-16); } }
+      gx.fillStyle='rgba(242,243,245,0.85)'; gx.font='10px sans-serif'; gx.textBaseline='middle';
+      gx.fillText((idx+1)+'. '+cl.name, Math.min(x0+5, Math.max(0, w-40)), 8.5, Math.max(10, x1-x0-8));
+    });
+  }
   var pp=playPos();
   if(pp>=0){ gx.fillStyle='#f2f3f5'; gx.fillRect(pp/dur*w,0,1.6,h); }
 }
@@ -624,7 +621,7 @@ function sizeCanvas(){
 window.addEventListener('resize', sizeCanvas);
 
 function updReads(){
-  $('rTotal').textContent=buf? fmtT(buf.duration):'--:--.-';
+  $('rTotal').textContent=buf? fmtT(tlDuration()):'--:--.-';
   $('rA').textContent=buf? fmtT(sel.a):'--:--.-';
   $('rB').textContent=buf? fmtT(sel.b):'--:--.-';
   $('rLen').textContent=buf? fmtT(Math.max(0,sel.b-sel.a)):'--:--.-';
@@ -642,40 +639,140 @@ function updExpName(){
   if(!buf){ $('expName').textContent=''; return; }
   $('expName').textContent=fileBase+(masterOn?'_master':'_edit')+'.'+$('fmtSel').value;
 }
-function setBuffer(nb, keepSel){
+/* ---------------- timeline ---------------- */
+function tlDuration(){ var t=0, i; for(i=0;i<clips.length;i++) t=Math.max(t, clips[i].start+clips[i].len); return t; }
+function sortedClips(){ return clips.slice().sort(function(a,b){ return a.start-b.start; }); }
+var SIN_C=null, COS_C=null;
+function xfCurves(){
+  if(!SIN_C){ var N=256; SIN_C=new Float32Array(N); COS_C=new Float32Array(N);
+    for(var j=0;j<N;j++){ var ph=j/(N-1)*Math.PI/2; SIN_C[j]=Math.sin(ph); COS_C[j]=Math.cos(ph); } }
+  return [SIN_C, COS_C];
+}
+function renderComposite(){
+  if(!clips.length) return Promise.resolve(null);
+  var sr=0, nCh=1, i;
+  for(i=0;i<clips.length;i++){ sr=Math.max(sr, clips[i].buf.sampleRate); nCh=Math.max(nCh, Math.min(2, clips[i].buf.numberOfChannels)); }
+  var total=tlDuration();
+  var off=new OfflineAudioContext(nCh, Math.max(1, Math.ceil(total*sr)), sr);
+  var master=off.createGain(); master.connect(off.destination);
+  if(fadeInSec>0.001) { master.gain.setValueAtTime(0, 0); master.gain.linearRampToValueAtTime(1, Math.min(fadeInSec, total)); }
+  if(fadeOutSec>0.001){ var t0=Math.max(0, total-fadeOutSec); master.gain.setValueAtTime(1, t0); master.gain.linearRampToValueAtTime(0, total); }
+  var sc=sortedClips(), curves=xfCurves();
+  sc.forEach(function(cl, idx){
+    var s=off.createBufferSource(); s.buffer=cl.buf;
+    var g=off.createGain();
+    var ovPrev=0, ovNext=0;
+    if(idx>0){ var p=sc[idx-1]; ovPrev=Math.max(0, p.start+p.len-cl.start); }
+    if(idx<sc.length-1){ var n=sc[idx+1]; ovNext=Math.max(0, cl.start+cl.len-n.start); }
+    ovPrev=Math.min(ovPrev, cl.len); ovNext=Math.min(ovNext, cl.len);
+    if(ovPrev>0.001) g.gain.setValueCurveAtTime(curves[0], cl.start, ovPrev);
+    if(ovNext>0.001) g.gain.setValueCurveAtTime(curves[1], cl.start+cl.len-ovNext, ovNext);
+    s.connect(g); g.connect(master);
+    s.start(cl.start, cl.srcOff, cl.len);
+  });
+  return off.startRendering();
+}
+var compSeq=0;
+function refreshComposite(){
+  var seq=++compSeq;
   stopPlay();
-  buf=nb; bufVer++; mCache=null; mKey='';
-  if(!keepSel) sel={a:0, b:nb? nb.duration:0};
-  peaks=null;
-  if(buf) computePeaks();
-  $('oLufs').textContent=fmtLUFS(buf? measureLUFS(buf):null);
-  $('mLufs').textContent='—';
-  updReads(); draw();
-  if(masterOn) scheduleMaster();
+  if(!clips.length){
+    buf=null; bufVer++; mCache=null; mKey=''; peaks=null;
+    $('oLufs').textContent=fmtLUFS(null); $('mLufs').textContent='—';
+    updReads(); draw();
+    return Promise.resolve(null);
+  }
+  return renderComposite().then(function(nb){
+    if(seq!==compSeq||!nb) return buf;
+    buf=nb; bufVer++; mCache=null; mKey='';
+    var dur=buf.duration;
+    sel.a=Math.max(0, Math.min(sel.a, dur)); sel.b=Math.max(0, Math.min(sel.b, dur));
+    peaks=null; computePeaks();
+    $('oLufs').textContent=fmtLUFS(measureLUFS(buf));
+    $('mLufs').textContent='—';
+    updReads(); draw();
+    if(masterOn) scheduleMaster();
+    return buf;
+  });
+}
+function moveClip(cl, newStart){
+  var sc=sortedClips(), idx=sc.indexOf(cl); if(idx<0) return;
+  if(idx>0){ var p=sc[idx-1]; var maxOv=Math.min(cl.len, p.len)-0.05; newStart=Math.max(newStart, p.start+p.len-Math.max(0.05, maxOv)); newStart=Math.max(newStart, p.start); }
+  if(idx<sc.length-1){ var n=sc[idx+1]; newStart=Math.min(newStart, n.start); }
+  cl.start=Math.max(0, newStart);
+}
+function trimClipLeft(cl, newStart){
+  var sc=sortedClips(), idx=sc.indexOf(cl); if(idx<0) return;
+  var lo=cl.start-cl.srcOff, hi=cl.start+cl.len-0.05;
+  if(idx>0) lo=Math.max(lo, sc[idx-1].start);
+  newStart=Math.max(lo, Math.min(hi, newStart));
+  var d=newStart-cl.start; cl.srcOff+=d; cl.len-=d; cl.start=newStart;
+}
+function trimClipRight(cl, newEnd){
+  var sc=sortedClips(), idx=sc.indexOf(cl); if(idx<0) return;
+  var lo=cl.start+0.05, hi=cl.start+(cl.buf.duration-cl.srcOff);
+  if(idx<sc.length-1) hi=Math.min(hi, sc[idx+1].start+sc[idx+1].len-0.05);
+  newEnd=Math.max(lo, Math.min(hi, newEnd));
+  cl.len=newEnd-cl.start;
 }
 
-/* selection interaction */
+/* selection + clip interaction */
 var drag=null;
 function x2t(e){ var r=cv.getBoundingClientRect(); var x=(e.clientX-r.left)/r.width; return Math.max(0, Math.min(buf? buf.duration:0, x*(buf? buf.duration:0))); }
+function hitClip(t, th){
+  var sc=sortedClips(), i;
+  for(i=0;i<sc.length-1;i++){
+    var p=sc[i], n=sc[i+1], pe=p.start+p.len;
+    if(Math.abs(t-pe)<=th){
+      if(Math.abs(n.start-pe)<=0.001) return {m:'bound', a:p, b:n};
+      return {m:'trimR', cl:p};
+    }
+  }
+  for(i=0;i<sc.length;i++){
+    var cl=sc[i];
+    if(Math.abs(t-cl.start)<=th) return {m:'trimL', cl:cl};
+    if(t>cl.start&&t<cl.start+cl.len) return {m:'move', cl:cl, off:t-cl.start};
+  }
+  return null;
+}
 cv.addEventListener('pointerdown', function(e){
   if(!buf) return;
-  var t=x2t(e), r=cv.getBoundingClientRect(), th=buf.duration*9/r.width;
+  var r=cv.getBoundingClientRect(), t=x2t(e), th=buf.duration*9/r.width;
   cv.setPointerCapture(e.pointerId);
+  if(e.clientY-r.top>=24){
+    var hit=hitClip(t, th);
+    if(hit){ pushUndo(); drag=hit; updReads(); draw(); return; }
+  }
   if(Math.abs(t-sel.a)<=th) drag={m:'a'};
   else if(Math.abs(t-sel.b)<=th) drag={m:'b'};
   else { drag={m:'new'}; sel={a:t,b:t}; }
   updReads(); draw();
 });
 cv.addEventListener('pointermove', function(e){
-  if(!drag||!buf) return;
-  var t=x2t(e);
+  if(!buf) return;
+  var t=x2t(e), r=cv.getBoundingClientRect(), th=buf.duration*9/r.width;
+  if(!drag){
+    var hit=(e.clientY-r.top>=24)? hitClip(t, th):null;
+    cv.style.cursor=hit? (hit.m==='move'? 'grab':'ew-resize') : 'text';
+    return;
+  }
   if(drag.m==='a') sel.a=Math.min(t, sel.b);
   else if(drag.m==='b') sel.b=Math.max(t, sel.a);
-  else { sel.a=Math.min(drag.a0!=null? drag.a0:(drag.a0=t), t); sel.b=Math.max(drag.a0, t); }
+  else if(drag.m==='new'){ sel.a=Math.min(drag.a0!=null? drag.a0:(drag.a0=t), t); sel.b=Math.max(drag.a0, t); }
+  else if(drag.m==='move') moveClip(drag.cl, t-drag.off);
+  else if(drag.m==='trimL') trimClipLeft(drag.cl, t);
+  else if(drag.m==='trimR') trimClipRight(drag.cl, t);
+  else if(drag.m==='bound'){ trimClipRight(drag.a, t); trimClipLeft(drag.b, t); }
   updReads(); draw();
 });
-cv.addEventListener('pointerup', function(){ drag=null; updReads(); });
-cv.addEventListener('pointercancel', function(){ drag=null; });
+function endDrag(){
+  if(!drag) return;
+  var wasClip=(drag.m==='move'||drag.m==='trimL'||drag.m==='trimR'||drag.m==='bound');
+  drag=null;
+  if(wasClip) refreshComposite(); else updReads();
+}
+cv.addEventListener('pointerup', endDrag);
+cv.addEventListener('pointercancel', endDrag);
 
 /* ---------------- playback ---------------- */
 function updateTransport(){
@@ -705,33 +802,48 @@ function startPlay(b, from, to, loop, mode){
 
 /* ---------------- edits ---------------- */
 function trimSel(){
-  if(!buf||sel.b-sel.a<=0.001) return;
+  if(!buf||sel.b-sel.a<=0.001) return Promise.resolve(null);
   pushUndo();
-  var nb=sliceBuf(buf, sel.a, sel.b);
-  setBuffer(nb);
+  var a=sel.a, b=sel.b, out=[];
+  clips.forEach(function(cl){
+    var cs=cl.start, ce=cl.start+cl.len;
+    var ns=Math.max(cs,a), ne=Math.min(ce,b);
+    if(ne-ns>0.001) out.push({id:cl.id, name:cl.name, buf:cl.buf, srcOff:cl.srcOff+(ns-cs), len:ne-ns, start:ns-a});
+  });
+  clips=out;
+  var nd=Math.max(0, b-a);
+  fadeInSec=Math.min(fadeInSec, nd); fadeOutSec=Math.min(fadeOutSec, nd);
+  sel={a:0, b:nd};
+  return refreshComposite();
 }
 function cutOutSel(){
-  if(!buf||sel.b-sel.a<=0.001) return;
+  if(!buf||sel.b-sel.a<=0.001) return Promise.resolve(null);
   pushUndo();
-  var head=sliceBuf(buf, 0, sel.a), tail=sliceBuf(buf, sel.b, buf.duration);
-  setBuffer(concatBufs(head, tail));
+  var a=sel.a, b=sel.b, d=b-a, out=[];
+  clips.forEach(function(cl){
+    var cs=cl.start, ce=cl.start+cl.len;
+    var le=Math.min(ce,a);
+    if(le-cs>0.001) out.push({id:cl.id, name:cl.name, buf:cl.buf, srcOff:cl.srcOff, len:le-cs, start:cs});
+    var rs=Math.max(cs,b);
+    if(ce-rs>0.001) out.push({id:cl.id, name:cl.name, buf:cl.buf, srcOff:cl.srcOff+(rs-cs), len:ce-rs, start:rs-d});
+  });
+  clips=out;
+  sel={a:0, b:tlDuration()};
+  return refreshComposite();
 }
 function fade(which, sec){
-  if(!buf) return;
-  sec=Math.max(0, parseFloat(sec)||0); if(sec<=0) return;
+  if(!buf) return Promise.resolve(null);
+  sec=Math.max(0, parseFloat(sec)||0); if(sec<=0) return Promise.resolve(null);
   pushUndo();
-  var nb=cloneBuf(buf), sr=buf.sampleRate, N=buf.length, n=Math.min(N, Math.round(sec*sr));
-  for(var c=0;c<nb.numberOfChannels;c++){
-    var d=nb.getChannelData(c), i, g;
-    if(which==='in'){ for(i=0;i<n;i++){ g=i/n; d[i]*=g; } }
-    else { for(i=0;i<n;i++){ g=1-i/n; d[N-n+i]*=g; } }
-  }
-  setBuffer(nb, true);
+  if(which==='in') fadeInSec=Math.min(sec, tlDuration()); else fadeOutSec=Math.min(sec, tlDuration());
+  return refreshComposite();
 }
 function doUndo(){
-  if(!undoStack.length) return;
-  stopPlay();
-  setBuffer(undoStack.pop());
+  if(!undoStack.length) return Promise.resolve(null);
+  var s=undoStack.pop();
+  clips=s.clips; fadeInSec=s.fi; fadeOutSec=s.fo;
+  sel={a:0, b:tlDuration()};
+  return refreshComposite();
 }
 
 /* ---------------- mastering ---------------- */
@@ -888,24 +1000,37 @@ function download(blob, name){
 }
 
 /* ---------------- load ---------------- */
-function loadFile(file){
-  return file.arrayBuffer().then(function(ab){
-    return actx.decodeAudioData(ab);
-  }).then(function(decoded){
+function addDecoded(name, decoded){
+  clips.push({id:++clipSeq, name:(name||'audio').replace(/\.[^.]+$/,'')||'audio', buf:decoded, srcOff:0, len:decoded.duration, start:tlDuration()});
+}
+function loadFiles(fl){
+  var chain=Promise.resolve(), first=null, wasEmpty=!clips.length;
+  Array.prototype.forEach.call(fl, function(file){
+    chain=chain.then(function(){
+      return file.arrayBuffer().then(function(ab){ return actx.decodeAudioData(ab); }).then(function(dec){
+        if(!first) first=file;
+        addDecoded(file.name, dec);
+      });
+    });
+  });
+  return chain.then(function(){
     undoStack=[];
-    fileBase=(file.name||'audio').replace(/\.[^.]+$/,'')||'audio';
-    $('fname').textContent=file.name||'';
-    setBuffer(decoded);
-    return {duration:decoded.duration, channels:decoded.numberOfChannels, sampleRate:decoded.sampleRate};
+    if(first&&wasEmpty) fileBase=(first.name||'audio').replace(/\.[^.]+$/,'')||'audio';
+    $('fname').textContent=clips.map(function(c){ return c.name; }).join(' \u00b7 ');
+    sel={a:0, b:tlDuration()};
+    return refreshComposite().then(function(){
+      return {duration:tlDuration(), channels:buf? buf.numberOfChannels:0, sampleRate:buf? buf.sampleRate:0, clips:clips.length};
+    });
   });
 }
+function loadFile(file){ return loadFiles([file]); }
 
 /* ---------------- UI wiring ---------------- */
 $('btnOpen').addEventListener('click', function(){ $('fileIn').click(); });
-$('fileIn').addEventListener('change', function(e){ if(e.target.files[0]) loadFile(e.target.files[0]).catch(function(err){ $('fname').textContent='解码失败: '+err.message; }); e.target.value=''; });
+$('fileIn').addEventListener('change', function(e){ if(e.target.files.length) loadFiles(e.target.files).catch(function(err){ $('fname').textContent='解码失败: '+err.message; }); e.target.value=''; });
 window.addEventListener('dragover', function(e){ e.preventDefault(); $('drop').style.display='flex'; });
 window.addEventListener('dragleave', function(e){ if(!e.relatedTarget) $('drop').style.display='none'; });
-window.addEventListener('drop', function(e){ e.preventDefault(); $('drop').style.display='none'; if(e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]).catch(function(){}); });
+window.addEventListener('drop', function(e){ e.preventDefault(); $('drop').style.display='none'; if(e.dataTransfer.files.length) loadFiles(e.dataTransfer.files).catch(function(){}); });
 $('btnAll').addEventListener('click', function(){ if(!buf) return; sel={a:0,b:buf.duration}; updReads(); draw(); });
 $('btnPlay').addEventListener('click', function(){ if(buf) startPlay(buf, 0, buf.duration, false, 'main'); });
 $('btnPlaySel').addEventListener('click', function(){ if(buf) startPlay(buf, sel.a, sel.b, loopOn, 'main'); });
@@ -1045,109 +1170,6 @@ $('btnBatch').addEventListener('click', function(){
   }).catch(function(){ batchStat('导出失败'); }).then(function(){ updBatchBtns(); });
 });
 
-/* ---------------- merger ---------------- */
-var mergeItems=[], mergeDragIdx=-1;
-function effXfade(buffers, xf){
-  if(!buffers||buffers.length<2||!(xf>0)) return 0;
-  var shortest=Infinity, i;
-  for(i=0;i<buffers.length;i++) shortest=Math.min(shortest, buffers[i].duration);
-  xf=Math.min(xf, buffers.length>2? shortest/2 : shortest);
-  return xf>0.001? xf:0;
-}
-function mergeStat(){
-  var tot=0; mergeItems.forEach(function(it){ tot+=it.buf.duration; });
-  var bufs=mergeItems.map(function(it){ return it.buf; });
-  var xf=effXfade(bufs, parseFloat($('xfadeSec').value)||0);
-  var gap=parseFloat($('gapSec').value)||0;
-  if(mergeItems.length>1) tot+=(xf>0? -xf:gap)*(mergeItems.length-1);
-  $('mergeStat').textContent=mergeItems.length? ('共 '+mergeItems.length+' 个 · '+fmtT(tot)) : '';
-  $('btnMerge').disabled=mergeItems.length<2;
-  $('btnMergeClear').disabled=!mergeItems.length;
-}
-function drawMerge(){
-  var box=$('mergeList'); box.innerHTML='';
-  mergeItems.forEach(function(it, idx){
-    var row=document.createElement('div'); row.className='fitem'; row.draggable=true;
-    var hd=document.createElement('span'); hd.className='hd'; hd.textContent='⠿';
-    var nm=document.createElement('span'); nm.className='nm'; nm.textContent=it.name;
-    var du=document.createElement('span'); du.className='dur'; du.textContent=fmtT(it.buf.duration);
-    var x=document.createElement('button'); x.className='x'; x.textContent='×'; x.title='移除';
-    x.addEventListener('click', function(){ mergeItems.splice(idx,1); drawMerge(); mergeStat(); });
-    row.appendChild(hd); row.appendChild(nm); row.appendChild(du); row.appendChild(x);
-    row.addEventListener('dragstart', function(e){ mergeDragIdx=idx; row.classList.add('drag'); try{ e.dataTransfer.setData('text/plain',''); e.dataTransfer.effectAllowed='move'; }catch(err){} });
-    row.addEventListener('dragend', function(){ mergeDragIdx=-1; drawMerge(); mergeStat(); });
-    row.addEventListener('dragover', function(e){ e.preventDefault(); row.classList.add('over'); });
-    row.addEventListener('dragleave', function(){ row.classList.remove('over'); });
-    row.addEventListener('drop', function(e){
-      e.preventDefault(); row.classList.remove('over');
-      if(mergeDragIdx<0||mergeDragIdx===idx) return;
-      var mv=mergeItems.splice(mergeDragIdx,1)[0];
-      mergeItems.splice(idx,0,mv);
-      mergeDragIdx=-1; drawMerge(); mergeStat();
-    });
-    box.appendChild(row);
-  });
-}
-function addMergeFiles(fl){
-  var chain=Promise.resolve();
-  Array.prototype.forEach.call(fl, function(file){
-    chain=chain.then(function(){
-      return file.arrayBuffer().then(function(ab){ return actx.decodeAudioData(ab); }).then(function(dec){
-        mergeItems.push({file:file, name:file.name, buf:dec});
-      }).catch(function(){});
-    });
-  });
-  return chain.then(function(){ drawMerge(); mergeStat(); });
-}
-function mergeAudioBuffers(buffers, gapSec, xfadeSec){
-  var sr=0, nCh=1, i;
-  for(i=0;i<buffers.length;i++){ sr=Math.max(sr, buffers[i].sampleRate); nCh=Math.max(nCh, Math.min(2, buffers[i].numberOfChannels)); }
-  var gap=gapSec||0, xf=effXfade(buffers, xfadeSec||0);
-  var total=0;
-  for(i=0;i<buffers.length;i++){ total+=buffers[i].duration; if(i<buffers.length-1) total+=(xf>0? -xf:gap); }
-  var off=new OfflineAudioContext(nCh, Math.max(1, Math.ceil(total*sr)), sr), t=0;
-  var cIn=null, cOut=null;
-  if(xf>0){
-    var N=Math.max(8, Math.min(1024, Math.round(xf*240)));
-    cIn=new Float32Array(N); cOut=new Float32Array(N);
-    for(var j=0;j<N;j++){ var ph=j/(N-1)*Math.PI/2; cIn[j]=Math.sin(ph); cOut[j]=Math.cos(ph); }
-  }
-  for(i=0;i<buffers.length;i++){
-    var s=off.createBufferSource(); s.buffer=buffers[i];
-    if(xf>0){
-      var g=off.createGain(), dur=buffers[i].duration;
-      g.gain.setValueAtTime(i>0? 0:1, t);
-      if(i>0) g.gain.setValueCurveAtTime(cIn, t, xf);
-      if(i<buffers.length-1) g.gain.setValueCurveAtTime(cOut, t+dur-xf, xf);
-      s.connect(g); g.connect(off.destination);
-    } else {
-      s.connect(off.destination);
-    }
-    s.start(t);
-    t+=buffers[i].duration+(xf>0? -xf:gap);
-  }
-  return off.startRendering();
-}
-$('btnMergeAdd').addEventListener('click', function(){ $('mergeIn').click(); });
-$('mergeIn').addEventListener('change', function(e){ if(e.target.files.length) addMergeFiles(e.target.files); e.target.value=''; });
-$('btnMergeClear').addEventListener('click', function(){ mergeItems=[]; drawMerge(); mergeStat(); });
-$('gapSec').addEventListener('input', mergeStat);
-$('xfadeSec').addEventListener('input', mergeStat);
-$('btnMerge').addEventListener('click', function(){
-  if(mergeItems.length<2) return;
-  var gap=Math.max(0, parseFloat($('gapSec').value)||0);
-  var xf=Math.max(0, parseFloat($('xfadeSec').value)||0);
-  var buffers=mergeItems.map(function(it){ return it.buf; });
-  $('btnMerge').disabled=true;
-  mergeAudioBuffers(buffers, gap, xf).then(function(merged){
-    if(buf) pushUndo();
-    fileBase='merged';
-    $('fname').textContent='合并 · '+buffers.length+' 个文件';
-    setBuffer(merged);
-  }).catch(function(){}).then(function(){ mergeStat(); });
-});
-
-
 /* ---------------- test API ---------------- */
 window.AC={
   loadFile:loadFile,
@@ -1155,14 +1177,19 @@ window.AC={
   setSel:function(a,b){ if(!buf) return; a=Math.max(0,Math.min(buf.duration,a)); b=Math.max(0,Math.min(buf.duration,b)); sel={a:Math.min(a,b), b:Math.max(a,b)}; updReads(); draw(); },
   trim:trimSel,
   cutOut:cutOutSel,
-  fadeIn:function(sec){ fade('in', sec); },
-  fadeOut:function(sec){ fade('out', sec); },
+  fadeIn:function(sec){ return fade('in', sec); },
+  fadeOut:function(sec){ return fade('out', sec); },
   undo:doUndo,
   measureLUFS:measureLUFS,
   master:function(opts){ opts=opts||{}; if(!buf) return Promise.reject(new Error('no audio loaded')); return renderMaster(buf, opts.preset||'universal', opts.intensity==null?50:opts.intensity, opts.gainDb||0); },
   exportBlob:exportBlob,
   batchZip:batchZip,
-  mergeBuffers:mergeAudioBuffers,
+  clips:function(){ return sortedClips().map(function(c){ return {name:c.name, start:c.start, len:c.len, srcOff:c.srcOff}; }); },
+  loadFiles:loadFiles,
+  moveClip:function(i, t){ var cl=sortedClips()[i]; if(!cl) return Promise.resolve(null); pushUndo(); moveClip(cl, t); return refreshComposite(); },
+  trimClip:function(i, side, t){ var cl=sortedClips()[i]; if(!cl) return Promise.resolve(null); pushUndo(); if(side==='L') trimClipLeft(cl, t); else trimClipRight(cl, t); return refreshComposite(); },
+  refresh:refreshComposite,
+  reset:function(){ clips=[]; fadeInSec=0; fadeOutSec=0; undoStack=[]; sel={a:0,b:0}; return refreshComposite(); },
   zipStore:zipStore
 };
 
