@@ -7,8 +7,8 @@
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   html,body { height:100%; background:#05070c; overflow:hidden; }
-  body { display:flex; align-items:center; justify-content:center; font-family:"PingFang SC","Microsoft YaHei",sans-serif; }
-  #wrap { position:relative; height:100vh; aspect-ratio:2/3; max-width:100vw; }
+  body { display:flex; align-items:flex-start; justify-content:center; padding-top:max(10px, env(safe-area-inset-top)); font-family:"PingFang SC","Microsoft YaHei",sans-serif; }   /* v50：画面靠上 */
+  #wrap { position:relative; height:100vh; height:100dvh; aspect-ratio:2/3; max-width:100vw; }
   @media (max-aspect-ratio: 2/3) { #wrap { width:100vw; height:auto; } }
   canvas { width:100%; height:100%; display:block; background:#1c2b1a; touch-action:none; }
   .tbtn { position:absolute; bottom:18px; width:64px; height:64px; border-radius:50%;
@@ -474,14 +474,14 @@ const TITLE_MENU = [
 const PAUSE_MENU = [
   { key:'save',    x:140, y:268, w:200, h:52, label:'保存进度', sub:'', col:'#7dff8a' },
   { key:'resume',  x:140, y:334, w:200, h:52, label:'继续战斗', sub:'', col:'#9adcff' },
-  { key:'restart', x:140, y:400, w:200, h:52, label:'重来一局', sub:'', col:'#ff9a7a' },
+  { key:'restart', x:140, y:400, w:200, h:52, label:'返回标题', sub:'重选机体 · 载入进度', col:'#ff9a7a' },   // v50：按用户要求，暂停重来=回标题页
 ];
 // v34：手机操控双模式 —— drag 手指拖动 / stick 虚拟摇杆；标题页左下角切换，选择持久保存
 let ctrlMode = 'drag';
 try { if (localStorage.getItem('kongya_kongsun_ctrl') === 'stick') ctrlMode = 'stick'; } catch(e) {}
 const CTRL_BTN = { x:14, y:660, w:168, h:44 };
-const STICK = { x:80, y:618, r:52, kr:23 };
-const PAUSE_BTN = { x:W-66, y:618, r:26 };
+const STICK = { x:80, y:600, r:52, kr:23 };   // v50：上移 18px，底部留操作余量
+const PAUSE_BTN = { x:W-66, y:600, r:26 };   // v50：与摇杆同排上移
 let stickVec = null, stickPid = null;
 function setStick(p){
   let dx = (p.x - STICK.x)/STICK.r, dy = (p.y - STICK.y)/STICK.r;
@@ -725,7 +725,7 @@ cv.addEventListener('pointerdown', e=>{
     const mk = menuHit(p.x,p.y,PAUSE_MENU);
     if (mk==='save'){ saveGame(); return; }
     if (mk==='resume'){ G.paused = false; return; }
-    if (mk==='restart'){ startGame(); return; }
+    if (mk==='restart'){ exitToTitle(); return; }   // v50：返回标题页（可重选机体、载入进度）
     return;                                   // 其余区域点击不移动战机
   }
   if ((G.state==='play'||G.state==='boss'||G.state==='warn') && !P.dead){
