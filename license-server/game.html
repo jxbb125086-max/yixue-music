@@ -489,6 +489,49 @@ function setStick(p){
   if (m > 1){ dx /= m; dy /= m; }
   stickVec = { x:dx, y:dy };
 }
+// v51：黑边摇杆 —— 画面靠上后，下方黑区足够大（>=150px）时把虚拟摇杆放到黑区中央（DOM 元件，独立接管触摸）；
+// 空间不足（桌面/矮屏）自动回退到画布内左下摇杆。判定在 layoutPad，模式切换/窗口尺寸变化时重算。
+let stickDom = false, padEl = null, knobEl = null, padPid = null, padCenter = { x:0, y:0 };
+const PAD_R = 54;
+let __padW = -1, __padH = -1;
+function ensurePad(){
+  if (padEl) return;
+  padEl = document.createElement('div');
+  padEl.id = 'stickPad';
+  padEl.style.cssText = 'position:fixed;width:118px;height:118px;border-radius:50%;border:2px solid rgba(154,220,255,.5);background:rgba(10,16,28,.4);display:none;z-index:30;touch-action:none;transform:translate(-50%,-50%)';
+  knobEl = document.createElement('div');
+  knobEl.style.cssText = 'position:absolute;left:50%;top:50%;width:52px;height:52px;border-radius:50%;background:rgba(154,220,255,.45);border:2px solid rgba(220,240,255,.65);transform:translate(-50%,-50%);pointer-events:none';
+  padEl.appendChild(knobEl);
+  document.body.appendChild(padEl);
+  const setFromEvent = e => {
+    let dx = (e.clientX - padCenter.x) / PAD_R, dy = (e.clientY - padCenter.y) / PAD_R;
+    const m = Math.hypot(dx, dy);
+    if (m > 1){ dx /= m; dy /= m; }
+    stickVec = { x: dx, y: dy };
+    knobEl.style.transform = 'translate(calc(-50% + ' + (dx * 30) + 'px), calc(-50% + ' + (dy * 30) + 'px))';
+  };
+  padEl.addEventListener('pointerdown', e => { padPid = e.pointerId; try { padEl.setPointerCapture(e.pointerId); } catch(err) {} setFromEvent(e); e.preventDefault(); });
+  padEl.addEventListener('pointermove', e => { if (e.pointerId === padPid) setFromEvent(e); });
+  const endPad = e => { if (e.pointerId === padPid){ padPid = null; stickVec = null; knobEl.style.transform = 'translate(-50%,-50%)'; } };
+  padEl.addEventListener('pointerup', endPad);
+  padEl.addEventListener('pointercancel', endPad);
+}
+function layoutPad(){
+  ensurePad();
+  const r = cv.getBoundingClientRect();
+  const vh = (window.visualViewport ? window.visualViewport.height : window.innerHeight);
+  const below = vh - r.bottom;
+  stickDom = ctrlMode === 'stick' && below >= 150;
+  if (stickDom){
+    padCenter = { x: r.left + r.width / 2, y: r.bottom + below / 2 };
+    padEl.style.left = padCenter.x + 'px';
+    padEl.style.top = padCenter.y + 'px';
+  } else if (padPid !== null){ padPid = null; stickVec = null; }
+}
+addEventListener('resize', layoutPad);
+if (window.visualViewport) window.visualViewport.addEventListener('resize', layoutPad);
+layoutPad();
+
 function menuHit(x,y,arr){
   for (const m of arr) if (x>=m.x && x<=m.x+m.w && y>=m.y && y<=m.y+m.h) return m.key;
   return null;
@@ -703,6 +746,7 @@ cv.addEventListener('pointerdown', e=>{
     if (p.x>=CTRL_BTN.x && p.x<=CTRL_BTN.x+CTRL_BTN.w && p.y>=CTRL_BTN.y && p.y<=CTRL_BTN.y+CTRL_BTN.h){
       ctrlMode = ctrlMode==='drag' ? 'stick' : 'drag';
       try { localStorage.setItem('kongya_kongsun_ctrl', ctrlMode); } catch(e) {}
+      layoutPad();
       sfx.pow(); return;
     }
     const hit = shipCardHit(p.x,p.y);
@@ -733,7 +777,7 @@ cv.addEventListener('pointerdown', e=>{
     if (Math.hypot(p.x-PAUSE_BTN.x, p.y-PAUSE_BTN.y) <= PAUSE_BTN.r + 8){   // 右下角暂停钮
       G.paused = true; touchTarget = null; stickVec = null; stickPid = null; return;
     }
-    if (ctrlMode==='stick'){ stickPid = e.pointerId; setStick(p); return; }  // 虚拟摇杆接管
+    if (ctrlMode==='stick' && !stickDom){ stickPid = e.pointerId; setStick(p); return; }  // 虚拟摇杆接管（黑边模式由 DOM 摇杆负责）
   }
   touchTarget = p;
 });
@@ -5090,8 +5134,15 @@ function drawTouchUI(){
   ctx.fillText('♪', MUSIC_BTN.x, MUSIC_BTN.y + 5);
   if (!musicOn){ ctx.strokeStyle = '#ff7a6e'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(MUSIC_BTN.x - 8, MUSIC_BTN.y + 8); ctx.lineTo(MUSIC_BTN.x + 8, MUSIC_BTN.y - 8); ctx.stroke(); }
   ctx.restore();
-  // 左下角虚拟摇杆（仅摇杆模式）
-  if (ctrlMode !== 'stick') return;
+  // v51：黑边摇杆显隐同步（尺寸变化时先重算布局）
+  if (padEl){
+    if (window.innerWidth !== __padW || window.innerHeight !== __padH){ __padW = window.innerWidth; __padH = window.innerHeight; layoutPad(); }
+    const show = stickDom && (G.state==='play' || G.state==='boss' || G.state==='warn') && !G.paused && !P.dead;
+    const want = show ? 'block' : 'none';
+    if (padEl.style.display !== want) padEl.style.display = want;
+  }
+  // 左下角虚拟摇杆（仅摇杆模式；黑边摇杆接管时不画）
+  if (ctrlMode !== 'stick' || stickDom) return;
   const kx = STICK.x + (stickVec ? stickVec.x * 30 : 0), ky = STICK.y + (stickVec ? stickVec.y * 30 : 0);
   ctx.save();
   ctx.fillStyle = 'rgba(8,16,28,0.42)';
