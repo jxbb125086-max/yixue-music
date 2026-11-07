@@ -408,14 +408,14 @@ async function licActivate(code){
   LIC.code = String(code).toUpperCase().trim(); LIC.token = d.token; LIC.admin = !!d.admin; saveLic();
   return d;
 }
-function openLicBox(){
+function openLicBox(note){
   let box = document.getElementById('licBox');
   if (!box){
     const st = document.createElement('style');
     st.textContent = '#licBox{position:fixed;inset:0;background:rgba(3,6,12,.72);display:flex;align-items:center;justify-content:center;z-index:50}#licCard{background:#0b1424;border:1px solid rgba(255,215,106,.5);border-radius:14px;padding:22px 22px 16px;width:min(320px,86vw);color:#e8edf2;box-shadow:0 18px 50px rgba(0,0,0,.5)}#licCard h3{margin:0 0 4px;font-size:17px;color:#ffd76a;letter-spacing:2px}#licCard p{margin:0 0 12px;font-size:12px;color:rgba(200,215,232,.75)}#licIn{width:100%;box-sizing:border-box;padding:11px 12px;font-size:17px;letter-spacing:3px;text-transform:uppercase;background:#060b16;border:1px solid rgba(255,255,255,.28);border-radius:9px;color:#fff;outline:none}#licMsg{min-height:18px;font-size:12px;margin:9px 0 4px;color:#ffab8a}#licRow{display:flex;gap:9px;margin-top:8px}#licRow button{flex:1;padding:11px 0;font-size:14px;font-weight:700;border-radius:9px;border:1px solid rgba(255,255,255,.25);background:#132036;color:#e8edf2;cursor:pointer}#licOk{background:linear-gradient(180deg,#ffe28a,#e9b64f);color:#23180a;border-color:#ffd76a}';
     document.head.appendChild(st);
     box = document.createElement('div'); box.id = 'licBox';
-    box.innerHTML = '<div id="licCard"><h3>授权码</h3><p>输入购买时获得的授权码，激活后绑定本设备。</p><input id="licIn" maxlength="12" autocomplete="off" placeholder="输入授权码"><div id="licMsg"></div><div id="licRow"><button id="licCancel">取消</button><button id="licOk">激活</button></div></div>';
+    box.innerHTML = '<div id="licCard"><h3>授权码</h3><p id="licNote">输入购买时获得的授权码，激活后绑定本设备。</p><input id="licIn" maxlength="12" autocomplete="off" placeholder="输入授权码"><div id="licMsg"></div><div id="licRow"><button id="licCancel">取消</button><button id="licOk">激活</button></div></div>';
     document.body.appendChild(box);
     box.addEventListener('pointerdown', e => { if (e.target === box) box.style.display = 'none'; });
     document.getElementById('licCancel').onclick = () => { box.style.display = 'none'; };
@@ -435,6 +435,7 @@ function openLicBox(){
       }
     };
   }
+  if (note) document.getElementById('licNote').textContent = note;
   const inp = document.getElementById('licIn');
   inp.value = LIC.code || '';
   document.getElementById('licMsg').textContent = '';
@@ -567,7 +568,7 @@ function saveGame(){
     return false;
   }
 }
-function loadGame(){
+function loadGameCore(){
   const s = readSave();
   if (!s) return false;
   resetWorld();
@@ -1566,7 +1567,7 @@ function resetWorld(){
   wrecks=[]; decals=[];
   G.boss = null;
 }
-function startGame(){
+function startGameCore(){
   G.state='play'; G.paused=false; G.t=0; G.scrollTime=0; G.biomeTimer=0; G.biomeIdx=0; G.scrolled=0; G.stormLeft=0;
   G.bossKills=0; G.lastBossIdx=-1; G.nextBossIdx=-1; G.bossDry=0; G.powerLvl=0; G.dmgMul=1; G.visMul=1; G.specCd=1; G.specPower=1; G.score=0; G.kills=0; G.shake=0; G.bannerT=0;
   P.x=W/2; P.y=H-130; P.hp=5; P.gun=1; P.invUntil=0; P.fireCd=0; P.dead=false; P.bank=0;
@@ -1580,7 +1581,7 @@ function startGame(){
 }
 // 续战：保留分数 / BOSS 击破数 / 已移植技能 / 主炮等级 / 关卡与取景进度，
 // 只把生命补满并清空场上威胁；机体可以在结束页重新选（G.ship 不重置）。
-function continueGame(){
+function continueGameCore(){
   G.paused = false; G.overT = 0; G.shake = 0; G.bannerT = 0; G.warnT = 0;
   P.x = W/2; P.y = H-130; P.hp = P.maxhp; P.dead = false;
   P.invUntil = G.t + 3; P.fireCd = 0; P.bank = 0;
@@ -5145,6 +5146,17 @@ function loop(ts){
 initTerrain();
 refreshSaveInfo();
 requestAnimationFrame(loop);
+
+/* ===== 部署版开局门禁：未激活不得开始（本地 file:// 母本不设卡） ===== */
+function licGate(){
+  if (location.protocol === 'file:') return true;
+  if (LIC.code) return true;
+  openLicBox('请先输入授权码，激活后才能开始游戏。');
+  return false;
+}
+function startGame(){ if (!licGate()) return; startGameCore(); }
+function continueGame(){ if (!licGate()) return; continueGameCore(); }
+function loadGame(){ if (!licGate()) return false; return loadGameCore.apply(null, arguments); }
 </script>
 </body>
 </html>
