@@ -361,7 +361,7 @@ const SKILL_SFX = {
 
 // ---------- input ----------
 const keys = {};
-let touchTarget = null;
+let dragPid = null, dragLast = null;   // v53：全屏相对拖动（任意位置按下拖动，手指位移驱动战机）
 // ---------- loadout: 主炮等级 & 两架机体 ----------
 const GUN_MAX = 12;
 // 苍隼（0）：中央并排直射 + 侧翼斜弹，逐级叠加弹数
@@ -476,7 +476,7 @@ const PAUSE_MENU = [
   { key:'resume',  x:140, y:334, w:200, h:52, label:'继续战斗', sub:'', col:'#9adcff' },
   { key:'restart', x:140, y:400, w:200, h:52, label:'返回标题', sub:'重选机体 · 载入进度', col:'#ff9a7a' },   // v50：按用户要求，暂停重来=回标题页
 ];
-// v52：操控统一为一种 —— 黑区触控板（下方模块）/ 画布内拖动 / 键盘鼠标，无模式切换（v34 双模式与 v51 黑边摇杆退役）
+// v53：操控只有一种 —— 全屏相对拖动：手指在屏幕任意位置（画面内或下方黑区）拖动，战机按位移跟随；另有键盘鼠标。无模式、无摇杆
 const PAUSE_BTN = { x:W-66, y:600, r:26 };   // 右下暂停钮（v50 上移留操作余量）
 let touchPadOn = false, padEl = null, dotEl = null, padPid = null, padLast = null;
 const padDelta = { x:0, y:0 };
@@ -707,7 +707,7 @@ function exitToTitle(){
   // 放弃本局返回标题：清掉战场残留，不写存档（旧存档原样保留）
   G.paused = false; G.state = 'title'; G.boss = null; G.warnT = 0; G.bannerT = 0; G.shake = 0;
   foes = []; grounds = []; bullets = []; ebs = []; allies = []; parts = []; texts = []; pows = []; beams = []; wrecks = []; decals = [];
-  touchTarget = null;
+  dragPid = null; dragLast = null;
 }
 addEventListener('keydown', e=>{
   keys[e.code] = true;
@@ -757,7 +757,6 @@ cv.addEventListener('pointerdown', e=>{
     return;   // v10：空白不再直接开局，必须明确选「新游戏 / 继续游戏」
   }
   if (G.state==='over'){
-    touchTarget = null;
     if (G.overT <= 0.6) return;                 // 坠机瞬间留一点缓冲，防止误触
     const oc = shipCardHit(p.x,p.y,OVER_CARDS);
     if (oc>=0){ G.ship = oc; sfx.pow(); return; }   // 续战前重新选机体
@@ -776,16 +775,26 @@ cv.addEventListener('pointerdown', e=>{
   if ((G.state==='play'||G.state==='boss'||G.state==='warn') && !P.dead){
     if (Math.hypot(p.x-MUSIC_BTN.x, p.y-MUSIC_BTN.y) <= MUSIC_BTN.r + 8){ toggleMusic(); return; }   // v46：音乐开关
     if (Math.hypot(p.x-PAUSE_BTN.x, p.y-PAUSE_BTN.y) <= PAUSE_BTN.r + 8){   // 右下角暂停钮
-      G.paused = true; touchTarget = null; padPid = null; padLast = null; padDelta.x = 0; padDelta.y = 0; return;
+      G.paused = true; dragPid = null; dragLast = null; padPid = null; padLast = null; padDelta.x = 0; padDelta.y = 0; return;
     }
   }
-  touchTarget = p;
+  if ((G.state==='play'||G.state==='boss'||G.state==='warn') && !P.dead && dragPid === null){
+    dragPid = e.pointerId; dragLast = p;   // v53：画布任意位置按下 → 相对拖动（手指不需对准战机）
+  }
 });
 cv.addEventListener('pointermove', e=>{
-  if (touchTarget) touchTarget = ptrPos(e);
+  if (dragPid !== null && e.pointerId === dragPid && dragLast){
+    const p = ptrPos(e);
+    padDelta.x += (p.x - dragLast.x) * 1.15;
+    padDelta.y += (p.y - dragLast.y) * 1.15;
+    dragLast = p;
+  }
 });
 addEventListener('pointerup', e=>{
-  touchTarget = null;
+  if (e.pointerId === dragPid){ dragPid = null; dragLast = null; }
+});
+addEventListener('pointercancel', e=>{
+  if (e.pointerId === dragPid){ dragPid = null; dragLast = null; }
 });
 
 // ---------- terrain: satellite-grade procedural tiles ----------
@@ -2296,15 +2305,10 @@ function updatePlayer(dt){
   if (keys['ArrowUp']||keys['KeyW']) my -= 1;
   if (keys['ArrowDown']||keys['KeyS']) my += 1;
   let moveDx = 0;
-  if (mx||my){ const l = Math.hypot(mx,my); P.x += mx/l*sp*dt; P.y += my/l*sp*dt; touchTarget = null; padDelta.x = 0; padDelta.y = 0; moveDx = mx/l; }
+  if (mx||my){ const l = Math.hypot(mx,my); P.x += mx/l*sp*dt; P.y += my/l*sp*dt; padDelta.x = 0; padDelta.y = 0; moveDx = mx/l; }
   else if (padDelta.x || padDelta.y){
-    P.x += padDelta.x; P.y += padDelta.y; moveDx = clamp(padDelta.x * 0.04, -1, 1);   // 黑区触控板：手指相对位移直接驱动战机
+    P.x += padDelta.x; P.y += padDelta.y; moveDx = clamp(padDelta.x * 0.04, -1, 1);   // 相对拖动（画布任意位置/黑区触控板共用）：手指位移直接驱动战机
     padDelta.x = 0; padDelta.y = 0;
-  }
-  else if (touchTarget){
-    const dx = touchTarget.x - P.x, dy = (touchTarget.y-46) - P.y;
-    const d = Math.hypot(dx,dy);
-    if (d > 4){ const v = Math.min(d*9, 560); P.x += dx/d*v*dt; P.y += dy/d*v*dt; moveDx = dx/d; }
   }
   // v12：横移时机翼偏侧 —— 移动方向一侧的机翼下沉，机体随之轻微侧倾
   let bankTarget = 0;
