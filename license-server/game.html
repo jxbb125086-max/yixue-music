@@ -665,7 +665,7 @@ function loadGameCore(){
     const d=s.boss, def=BOSSES[d.defIdx] || BOSSES[0];
     G.boss = {
       defIdx:d.defIdx, def, x:d.x, y:-120, r:d.r, hp:d.hp, maxhp:d.maxhp,
-      defMul:d.defMul, atkR:d.atkR || layerScale(G.bossKills).bossAtk,
+      defMul:d.defMul, atkR:d.atkR || layerScale(diffN()).bossAtk,
       state:'enter', enterT:0, t:d.t, moveT:0,
       t1:Math.max(d.t1,1.8), t2:Math.max(d.t2,2.4), t3:Math.max(d.t3,3.0),
       sigT:3.2, mode:d.mode, modeT:d.modeT, ang:d.ang, flash:0,
@@ -2039,6 +2039,9 @@ function foeHpMul(n){
   const steps = layer >= 6 ? (layer - 5) : 0;             // v19：第 6 层起每层 +5%，一直向上累计（不封顶）
   return base * (1 + steps*0.05);                         // 层 11 = +30%，层 100 = +475%
 }
+// 战役版难度层数：战役模式下玩家成长跟不上无尽曲线 —— 难度在第 15 层封顶
+// （第 15 层开打时 bossKills=14，此后所有成长参数都按 n=14 取值）；无尽模式照旧。
+function diffN(){ return G.mode === 'campaign' ? Math.min(G.bossKills || 0, 14) : (G.bossKills || 0); }
 // v19：第 6 层起每层 +5% 的「层加成」系数（血量与防御共用同一条曲线）
 function foeLayerBoost(n){
   n = Math.max(0, n|0);
@@ -2070,11 +2073,11 @@ function layerScale(n){
 }
 // BOSS 弹幕数量随层数平滑增加：每 perLayer 层 +1 发，封顶 cap 发
 function bossVolley(base, perLayer, cap){
-  return base + Math.min(cap, Math.floor((G.bossKills||0)/perLayer));
+  return base + Math.min(cap, Math.floor(diffN()/perLayer));
 }
 let DIFF = { early:0, hp:1, rate:1, bullets:1, spawn:1, speed:1 };
 function foeDifficulty(){
-  const n = G.bossKills||0;
+  const n = diffN();
   const early = (n===0 && G.t < 20) ? 1 : 0;
   const L = layerScale(n);
   return {
@@ -2185,7 +2188,7 @@ function fireAimed(x, y, sp, big){
 // 防空台 / 导弹发射台的跟踪导弹齐射数：0-4→1、5-9→2、10-14→3、15-19→4、20-24→5，
 // 之后每 25 层再加 1 发，封顶 7 发 —— 无尽模式下继续缓慢增长但不失控。
 function groundMissileCount(){
-  const n = G.bossKills||0;
+  const n = diffN();
   return 1 + Math.min(4, Math.floor(Math.min(n,20)/5)) + Math.min(2, Math.floor(Math.max(0,n-20)/25));
 }
 function fireMissileSalvo(x, y, n){
@@ -2473,7 +2476,7 @@ function updateFoes(dt){
         // v16：无人机随层数逐渐学会开火 —— 第 3 层起解锁，层数越高射得越密（间隔封顶 ×2.2 缩短）
         if (G.bossKills >= 2){
           fireAimed(f.x, f.y+8, 210);
-          f.shootT = rand(3.4, 4.8) / (DIFF.rate * (1 + Math.min(1.2, G.bossKills*0.06)));
+          f.shootT = rand(3.4, 4.8) / (DIFF.rate * (1 + Math.min(1.2, diffN()*0.06)));
         } else f.shootT = 9;
       }
       else f.shootT = 1/DIFF.rate;
@@ -2822,7 +2825,7 @@ function bossList(){ const L = []; if (G.boss) L.push(G.boss); if (G.boss2) L.pu
 function isBossT(t){ return t === G.boss || t === G.boss2; }
 function makeBoss(idx, x){
   const def = BOSSES[idx];
-  const L = layerScale(G.bossKills);
+  const L = layerScale(diffN());
   return {
     defIdx: idx, def, x: (x == null ? W/2 : x), y: -120, r: def.r, hp: Math.round(def.hp * L.bossHp), maxhp: Math.round(def.hp * L.bossHp),
     defMul: L.bossDef, atkR: L.bossAtk, state:'enter', enterT:0, t:0, moveT:0, t1:1.2, t2:2.5, t3:4, sigT:3.2,
@@ -3000,16 +3003,16 @@ function updateBoss(b, dt){
     case 0: // giant cannon
       if (b.t1<=0){
         // v16：巨炮随层数进化 —— 弹速最高 +90%（第 20 层满），装填在 atkR 之外再提速最高 35%
-        const hv = 248 * (1 + Math.min(0.90, G.bossKills*0.045));
+        const hv = 248 * (1 + Math.min(0.90, diffN()*0.045));
         ebs.push({ x:b.x+Math.cos(b.ang)*54, y:b.y+Math.sin(b.ang)*54, vx:Math.cos(b.ang)*hv, vy:Math.sin(b.ang)*hv, r:8, big:true });
-        playSfx('bossCannon'); b.t1 = 2.6 / (1 + Math.min(0.35, G.bossKills*0.012));
+        playSfx('bossCannon'); b.t1 = 2.6 / (1 + Math.min(0.35, diffN()*0.012));
       }
       if (b.t2<=0){ fireSpread(b.x, b.y+30, 5, 205, Math.PI/2 + (px>b.x?0.16:-0.16)); b.t2 = 4.2; }
       break;
     case 1: // battleship
       b.x = (b.homeX != null ? b.homeX : W/2) + Math.sin(b.moveT*0.35)*58*(b.homeX != null ? 0.5 : 1);
       if (b.t1<=0){ fireSpread(b.x-52, b.y+22, 3, 230, Math.PI/2); fireSpread(b.x+52, b.y+22, 3, 230, Math.PI/2); b.t1 = 2.3; }
-      if (b.t2<=0){ fireSpread(b.x, b.y+30, 7 + (G.bossKills>=5?2:0), 196, Math.PI/2); b.t2 = 4.6; }
+      if (b.t2<=0){ fireSpread(b.x, b.y+30, 7 + (diffN()>=5?2:0), 196, Math.PI/2); b.t2 = 4.6; }
       break;
     case 2: // fortress
       if (b.t1<=0){ const offs=[-58,0,58]; fireAimed(b.x+offs[b.spawnN%3], b.y+16, 238); b.spawnN++; b.t1 = 0.85; }
@@ -3019,7 +3022,7 @@ function updateBoss(b, dt){
       b.x = (b.homeX != null ? b.homeX : W/2) + Math.sin(b.moveT*0.28)*44*(b.homeX != null ? 0.5 : 1);
       if (b.t1<=0){
         // v16：航母蜂群随层数扩大 —— 每波 1 架 → 每两层 +1 架，封顶 6 架；机群继承层级血量（DIFF.hp）
-        const cn = 1 + Math.min(5, Math.floor(G.bossKills/2));
+        const cn = 1 + Math.min(5, Math.floor(diffN()/2));
         for (let i=0;i<cn && foes.length<10;i++){
           const f = { kind: Math.random()<0.5?'fighter':'drone', x:b.x+rand(-60,60), y:b.y+34, r:12, hp:2, vy:rand(150,210), ph:rand(0,TAU), shootT:rand(1.4,2.4), score:100 };
           if (f.kind==='drone'){ f.hp=1; f.r=10; }
