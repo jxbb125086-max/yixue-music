@@ -668,9 +668,9 @@ function loadGameCore(){
   if (s.boss){
     const d=s.boss, def=BOSSES[d.defIdx] || BOSSES[0];
     G.boss = {
-      defIdx:d.defIdx, def, x:d.x, y:-120, r:d.r, hp:d.hp, maxhp:d.maxhp,
+      defIdx:d.defIdx, def, x:d.x, y:(d.y == null ? -120 : d.y), r:d.r, hp:d.hp, maxhp:d.maxhp,
       defMul:d.defMul, atkR:d.atkR || layerScale(diffN()).bossAtk,
-      state:'enter', enterT:0, t:d.t, moveT:0,
+      state:(d.state === 'dying' ? 'dying' : 'fight'), enterT:0, t:d.t, moveT:d.moveT || 0,
       t1:Math.max(d.t1,1.8), t2:Math.max(d.t2,2.4), t3:Math.max(d.t3,3.0),
       sigT:3.2, mode:d.mode, modeT:d.modeT, ang:d.ang, flash:0,
       beamTele:null, beamOn:null, dieT:0, spawnN:0,
@@ -1661,7 +1661,7 @@ const STORY = {
   twin:{ t:'双星要塞 · 合璧', lines:['两座要塞共享一条能源链，','一座是炮，一座是导弹巢。','先断哪一边，你说了算——','但剩下的那一边，会发疯。'] },
   prep:{ t:'敌势升级', lines:['合璧的残骸信号传回了敌方大本营：','所有要塞开始以进化形态返场，','血量过半后，它们会亮出新招式。','检查你的技能栏——接下来拼的是积累。'] },
   dualwarn:{ t:'⚠ 合体预警 ⚠', lines:['侦测到复数要塞信号正在重叠——','从这一层起，BOSS 将成对出现，','精英单位也会随时乱入战场。','稳住阵型，别被夹在中间。'] },
-  ending:{ t:'终章 · 天空夺回', lines:['终焉母舰坠入海面，火光照亮了整条航线。','52 层的天空，重新安静下来。','而在航线之外，无尽空域还在延伸——','无尽模式，已经为你解锁。'] },
+  ending:{ t:'终章 · 天空夺回', lines:['终焉母舰坠入海面，火光照亮了整条航线。','51 层的天空，重新安静下来。','而在航线之外，无尽空域还在延伸——','无尽模式，已经为你解锁。'] },
 };
 const STORY_BTN = { x:170, y:406, w:140, h:42 };
 function enterStory(key, kind){
@@ -1676,7 +1676,7 @@ function advanceStory(){
   G.storyKind = ''; G.state = 'play'; G.scrollTime = 0;
 }
 
-// ================= 战役版：52 层战役导演（剧情版） =================
+// ================= 战役版：51 层战役导演（剧情版） =================
 const CAMP_SCROLL = 25;   // 战役每层默认推进段时间（秒），之后 WARNING；条目可用 scroll 覆盖
 function shuffle12(){
   const a = [0,1,2,3,4,5,6,7,8,9,10,11];
@@ -1698,8 +1698,7 @@ function buildCampTable(){
   T.push({ type:'twin', story:'twin' });                                                                                    // 25 双星要塞·合璧
   for (let i = 0; i < 12; i++) T.push({ type:'single', idx:G.campSingles[i], evo:true, story:(i === 0 ? 'prep' : null) });  // 26–37 进化返场（26 层前升级预警）
   for (let i = 0; i < 13; i++) T.push({ type:'dual', a:G.campPairs[i][0], b:G.campPairs[i][1], eliteChaos:true, warn5:(i === 0) });  // 38–50 随机组合 + 精英乱入（38 层前合体预警 5 秒）
-  T.push({ type:'rest', scroll:15 });                                                                                       // 51 休整 15 秒
-  T.push({ type:'final' });                                                                                                 // 52 终焉母舰·无尽（直接入场，无介绍）
+  T.push({ type:'finale', scroll:15 });                                                                                      // 51 决战：推进 15 秒后终焉母舰直接入场（无预警、无休整关）
   CAMP_TABLE = T;
   return T;
 }
@@ -1712,7 +1711,7 @@ function campBiomeOf(e){
   if (e.type === 'dual'){ const d = BOSSES[e.a]; return d.air ? -1 : d.biome; }
   if (e.type === 'twin' || e.type === 'twin1') return 0;
   if (e.type === 'rest') return 4;
-  if (e.type === 'final') return 4;
+  if (e.type === 'final' || e.type === 'finale') return 4;
   return -1;
 }
 function campWarnIdx(e){
@@ -1720,7 +1719,7 @@ function campWarnIdx(e){
   if (e.type === 'single') return e.idx;
   if (e.type === 'dual') return e.a;
   if (e.type === 'twin' || e.type === 'twin1') return 12;
-  if (e.type === 'final') return 13;
+  if (e.type === 'final' || e.type === 'finale') return 13;
   return -1;
 }
 function campLayerSetup(){
@@ -1732,7 +1731,7 @@ function campLayerSetup(){
   if (e && e.type === 'twin') nm += ' · 双星要塞';
   else if (e && e.type === 'twin1') nm += ' · 前夜战';
   else if (e && e.type === 'rest') nm += ' · 休整';
-  else if (e && e.type === 'final') nm += ' · 决战';
+  else if (e && (e.type === 'final' || e.type === 'finale')) nm += ' · 决战';
   else if (e && e.evo) nm += ' · 进化返场';
   else if (e && e.type === 'dual') nm += ' · 双体战';
   G.bannerText = nm;
@@ -1753,7 +1752,7 @@ function campStartEncounter(){
   else if (e.type === 'dual'){ startDualBoss(e.a, e.b); }
   else if (e.type === 'twin'){ startTwinBoss(false); }
   else if (e.type === 'twin1'){ startTwinBoss(true); spawnElite(); spawnElite(); }
-  else if (e.type === 'final'){ startFinalBoss(); }
+  else if (e.type === 'final' || e.type === 'finale'){ startFinalBoss(); }
 }
 function campaignOnBossesCleared(){
   if (G.mode !== 'campaign') return;
@@ -1804,12 +1803,14 @@ function continueGameCore(){
   P.droneFireT = 0; P.droneGuard = 0;
   bullets=[]; ebs=[]; foes=[]; grounds=[]; parts=[]; pows=[];
   texts=[]; beams=[]; wrecks=[]; decals=[]; allies=[];
-  if (G.boss){
-    // BOSS 战中阵亡：保留这只 BOSS 的血量，重新给一段入场缓冲后接着打
-    const b = G.boss;
-    b.state='enter'; b.enterT=0; b.moveT=0; b.y=-120;
-    b.beamTele=null; b.beamOn=null; b.sigT=2.4;
-    b.t1=Math.max(b.t1||0,1.8); b.t2=Math.max(b.t2||0,2.4); b.t3=Math.max(b.t3||0,3.0);
+  if (G.boss || G.boss2){
+    // BOSS 战中阵亡：BOSS 原地保留——位置、移动相位（moveT）、状态全不动，
+    // 只清掉光束预告/标定并把攻击计时推后，给玩家一段缓冲接着打。
+    // （旧做法把 BOSS 送回入场：y 跳回屏外、moveT 清零，入场结束时 X 又横跳一次，就是玩家看到的「瞬移」。）
+    for (const b of bossList()){
+      b.beamTele=null; b.beamOn=null; b.sonar=null; b.mark=null; b.sigT=Math.max(b.sigT||0, 2.4);
+      b.t1=Math.max(b.t1||0,1.8); b.t2=Math.max(b.t2||0,2.4); b.t3=Math.max(b.t3||0,3.0);
+    }
     G.state='boss';
   } else {
     G.state='play';
@@ -2123,9 +2124,12 @@ function foeHpMul(n){
   const steps = layer >= 6 ? (layer - 5) : 0;             // v19：第 6 层起每层 +5%，一直向上累计（不封顶）
   return base * (1 + steps*0.05);                         // 层 11 = +30%，层 100 = +475%
 }
-// 战役版难度层数：战役模式下玩家成长跟不上无尽曲线 —— 难度在第 15 层封顶
-// （第 15 层开打时 bossKills=14，此后所有成长参数都按 n=14 取值）；无尽模式照旧。
-function diffN(){ return G.mode === 'campaign' ? Math.min(G.bossKills || 0, 14) : (G.bossKills || 0); }
+// 难度层数（战役/无尽共用，用户 2026-11-08 定）：1–15 层随击破数递进；
+// 16–20 层锁定在第 15 层难度；第 21 层起按第 16 层难度继续增长（n 减 5 续爬）。
+function diffN(){
+  const n = G.bossKills || 0;
+  return n <= 14 ? n : (n <= 19 ? 14 : n - 5);
+}
 // v19：第 6 层起每层 +5% 的「层加成」系数（血量与防御共用同一条曲线）
 function foeLayerBoost(n){
   n = Math.max(0, n|0);
@@ -5439,7 +5443,7 @@ function drawScreens(){
   if (G.state==='over' && G.campClear){
     ctx.fillStyle = 'rgba(6,10,4,0.82)'; ctx.fillRect(0,0,W,H);
     centerText('通 关', 190, 'bold 46px sans-serif', '#ffd76a');
-    centerText('52 层战役 · 全线击破', 240, 'bold 18px sans-serif', '#7dff8a');
+    centerText('51 层战役 · 全线击破', 240, 'bold 18px sans-serif', '#7dff8a');
     centerText('得分 ' + G.score, 282, '20px sans-serif', '#fff');
     centerText('击破 BOSS ' + G.bossKills + ' 台 · 已移植技能 ' + P.specials.length + ' 项', 316, '14px sans-serif', '#cfd8e2');
     centerText('🏆 无尽模式已解锁', 366, 'bold 17px sans-serif', '#ffd76a');
@@ -5535,6 +5539,8 @@ function update(dt){
       }
     }
     if (G.state==='play' && G.scrollTime >= (G.mode === 'campaign' ? campScrollOf() : BOSS_INTERVAL)){
+      if (G.mode === 'campaign' && (campEntry(G.campLayer) || {}).type === 'finale'){ campStartEncounter(); }   // 决战层：无预警，终焉母舰直接入场
+      else {
       G.state = 'warn'; G.warnT = (G.mode === 'campaign' && (campEntry(G.campLayer) || {}).intro) ? 5 : 3; sfx.warn();
       if (G.mode === 'campaign'){
         G.nextBossIdx = campWarnIdx(campEntry(G.campLayer));
@@ -5543,6 +5549,7 @@ function update(dt){
       } else {
         G.nextBossIdx = pickBossIdx();
         if (!BOSSES[G.nextBossIdx].air) requestBiome(BOSSES[G.nextBossIdx].biome, 3);   // 预警阶段就开始过渡地形（空天母舰除外）
+      }
       }
     } else if (G.state==='warn'){
       G.warnT -= dt;
