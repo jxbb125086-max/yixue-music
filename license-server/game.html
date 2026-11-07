@@ -361,7 +361,6 @@ const SKILL_SFX = {
 
 // ---------- input ----------
 const keys = {};
-let dragPid = null, dragLast = null;   // v53：全屏相对拖动（任意位置按下拖动，手指位移驱动战机）
 // ---------- loadout: 主炮等级 & 两架机体 ----------
 const GUN_MAX = 12;
 // 苍隼（0）：中央并排直射 + 侧翼斜弹，逐级叠加弹数
@@ -476,44 +475,64 @@ const PAUSE_MENU = [
   { key:'resume',  x:140, y:334, w:200, h:52, label:'继续战斗', sub:'', col:'#9adcff' },
   { key:'restart', x:140, y:400, w:200, h:52, label:'返回标题', sub:'重选机体 · 载入进度', col:'#ff9a7a' },   // v50：按用户要求，暂停重来=回标题页
 ];
-// v53：操控只有一种 —— 全屏相对拖动：手指在屏幕任意位置（画面内或下方黑区）拖动，战机按位移跟随；另有键盘鼠标。无模式、无摇杆
+// v54：操控只有一种 —— 按下点即操控点：手指在屏幕任意位置（画面内/下方黑区）按下，那个点就是浮动摇杆原点，推开的方向幅度控制战机；另有键盘鼠标
 const PAUSE_BTN = { x:W-66, y:600, r:26 };   // 右下暂停钮（v50 上移留操作余量）
-let touchPadOn = false, padEl = null, dotEl = null, padPid = null, padLast = null;
-const padDelta = { x:0, y:0 };
+let touchPadOn = false, padEl = null;
+let ctl = { id:null, ox:0, oy:0, x:0, y:0 };
+let ctlEl = null, ctlKnob = null;
 let __padW = -1, __padH = -1;
+function ensureCtl(){
+  if (ctlEl) return;
+  ctlEl = document.createElement('div');
+  ctlEl.style.cssText = 'position:fixed;width:104px;height:104px;border-radius:50%;border:2px solid rgba(154,220,255,.5);background:rgba(10,16,28,.32);display:none;z-index:31;pointer-events:none;transform:translate(-50%,-50%)';
+  ctlKnob = document.createElement('div');
+  ctlKnob.style.cssText = 'position:absolute;left:50%;top:50%;width:48px;height:48px;border-radius:50%;background:rgba(154,220,255,.45);border:2px solid rgba(220,240,255,.6);transform:translate(-50%,-50%)';
+  ctlEl.appendChild(ctlKnob);
+  document.body.appendChild(ctlEl);
+}
+function ctlStart(e){
+  if (ctl.id !== null) return;
+  ensureCtl();
+  ctl.id = e.pointerId; ctl.ox = ctl.x = e.clientX; ctl.oy = ctl.y = e.clientY;
+  ctlEl.style.left = ctl.ox + 'px'; ctlEl.style.top = ctl.oy + 'px';
+  ctlKnob.style.transform = 'translate(-50%,-50%)';
+  ctlEl.style.display = 'block';
+}
+function ctlMove(e){
+  if (e.pointerId !== ctl.id) return;
+  ctl.x = e.clientX; ctl.y = e.clientY;
+  let dx = e.clientX - ctl.ox, dy = e.clientY - ctl.oy;
+  const m = Math.hypot(dx, dy), max = 34;
+  if (m > max){ dx = dx / m * max; dy = dy / m * max; }
+  ctlKnob.style.transform = 'translate(calc(-50% + ' + dx + 'px), calc(-50% + ' + dy + 'px))';
+}
+function ctlEnd(e){
+  if (e && e.pointerId !== ctl.id) return;
+  ctl.id = null;
+  if (ctlEl) ctlEl.style.display = 'none';
+}
+function ctlVec(){
+  if (ctl.id === null) return null;
+  const r = cv.getBoundingClientRect();
+  const sc = 480 / r.width;
+  const dx = (ctl.x - ctl.ox) * sc, dy = (ctl.y - ctl.oy) * sc;
+  const m = Math.hypot(dx, dy);
+  if (m <= 6) return null;
+  const k = Math.min(1, m / 52) / m;
+  return { x: dx * k, y: dy * k };
+}
+addEventListener('pointerup', ctlEnd);
+addEventListener('pointercancel', ctlEnd);
 function ensurePad(){
   if (padEl) return;
   padEl = document.createElement('div');
   padEl.id = 'touchPad';
   padEl.style.cssText = 'position:fixed;display:none;z-index:30;touch-action:none;border-top:1px solid rgba(154,220,255,.14);background:rgba(120,180,255,0.03)';
-  dotEl = document.createElement('div');
-  dotEl.style.cssText = 'position:absolute;width:56px;height:56px;border-radius:50%;background:rgba(154,220,255,.18);border:1.5px solid rgba(154,220,255,.4);transform:translate(-50%,-50%);display:none;pointer-events:none';
-  padEl.appendChild(dotEl);
   document.body.appendChild(padEl);
-  function moveDot(e){
-    const pr = padEl.getBoundingClientRect();
-    dotEl.style.left = (e.clientX - pr.left) + 'px';
-    dotEl.style.top = (e.clientY - pr.top) + 'px';
-  }
-  padEl.addEventListener('pointerdown', e => {
-    if (padPid !== null) return;
-    padPid = e.pointerId; padLast = { x: e.clientX, y: e.clientY };
-    try { padEl.setPointerCapture(e.pointerId); } catch(err) {}
-    dotEl.style.display = 'block'; moveDot(e);
-    e.preventDefault();
-  });
-  padEl.addEventListener('pointermove', e => {
-    if (e.pointerId !== padPid || !padLast) return;
-    const r = cv.getBoundingClientRect();
-    const g = (480 / r.width) * 1.15;   // CSS 位移 → 游戏位移，1.15 倍灵敏度（触控板式相对操控）
-    padDelta.x += (e.clientX - padLast.x) * g;
-    padDelta.y += (e.clientY - padLast.y) * g;
-    padLast = { x: e.clientX, y: e.clientY };
-    moveDot(e);
-  });
-  const endPad = e => { if (e.pointerId === padPid){ padPid = null; padLast = null; dotEl.style.display = 'none'; } };
-  padEl.addEventListener('pointerup', endPad);
-  padEl.addEventListener('pointercancel', endPad);
+  padEl.addEventListener('pointerdown', e => { ctlStart(e); try { padEl.setPointerCapture(e.pointerId); } catch(err) {} e.preventDefault(); });
+  padEl.addEventListener('pointermove', ctlMove);
+  padEl.addEventListener('pointerup', ctlEnd);
+  padEl.addEventListener('pointercancel', ctlEnd);
 }
 function layoutPad(){
   ensurePad();
@@ -526,7 +545,7 @@ function layoutPad(){
     padEl.style.top = r.bottom + 'px';
     padEl.style.width = r.width + 'px';
     padEl.style.height = below + 'px';
-  } else if (padPid !== null){ padPid = null; padLast = null; padDelta.x = 0; padDelta.y = 0; dotEl.style.display = 'none'; }
+  }
 }
 function syncPad(){
   if (!padEl) return;
@@ -707,7 +726,7 @@ function exitToTitle(){
   // 放弃本局返回标题：清掉战场残留，不写存档（旧存档原样保留）
   G.paused = false; G.state = 'title'; G.boss = null; G.warnT = 0; G.bannerT = 0; G.shake = 0;
   foes = []; grounds = []; bullets = []; ebs = []; allies = []; parts = []; texts = []; pows = []; beams = []; wrecks = []; decals = [];
-  dragPid = null; dragLast = null;
+  ctlEnd();
 }
 addEventListener('keydown', e=>{
   keys[e.code] = true;
@@ -775,27 +794,14 @@ cv.addEventListener('pointerdown', e=>{
   if ((G.state==='play'||G.state==='boss'||G.state==='warn') && !P.dead){
     if (Math.hypot(p.x-MUSIC_BTN.x, p.y-MUSIC_BTN.y) <= MUSIC_BTN.r + 8){ toggleMusic(); return; }   // v46：音乐开关
     if (Math.hypot(p.x-PAUSE_BTN.x, p.y-PAUSE_BTN.y) <= PAUSE_BTN.r + 8){   // 右下角暂停钮
-      G.paused = true; dragPid = null; dragLast = null; padPid = null; padLast = null; padDelta.x = 0; padDelta.y = 0; return;
+      G.paused = true; ctlEnd(); return;
     }
   }
-  if ((G.state==='play'||G.state==='boss'||G.state==='warn') && !P.dead && dragPid === null){
-    dragPid = e.pointerId; dragLast = p;   // v53：画布任意位置按下 → 相对拖动（手指不需对准战机）
+  if ((G.state==='play'||G.state==='boss'||G.state==='warn') && !P.dead){
+    ctlStart(e);   // v54：按下点即操控点（浮动摇杆，任意位置）
   }
 });
-cv.addEventListener('pointermove', e=>{
-  if (dragPid !== null && e.pointerId === dragPid && dragLast){
-    const p = ptrPos(e);
-    padDelta.x += (p.x - dragLast.x) * 1.15;
-    padDelta.y += (p.y - dragLast.y) * 1.15;
-    dragLast = p;
-  }
-});
-addEventListener('pointerup', e=>{
-  if (e.pointerId === dragPid){ dragPid = null; dragLast = null; }
-});
-addEventListener('pointercancel', e=>{
-  if (e.pointerId === dragPid){ dragPid = null; dragLast = null; }
-});
+cv.addEventListener('pointermove', ctlMove);
 
 // ---------- terrain: satellite-grade procedural tiles ----------
 // v22：实景卫星瓦片已整套移除（商用授权与合规考虑），地形为纯离线程序生成：
@@ -2305,10 +2311,10 @@ function updatePlayer(dt){
   if (keys['ArrowUp']||keys['KeyW']) my -= 1;
   if (keys['ArrowDown']||keys['KeyS']) my += 1;
   let moveDx = 0;
-  if (mx||my){ const l = Math.hypot(mx,my); P.x += mx/l*sp*dt; P.y += my/l*sp*dt; padDelta.x = 0; padDelta.y = 0; moveDx = mx/l; }
-  else if (padDelta.x || padDelta.y){
-    P.x += padDelta.x; P.y += padDelta.y; moveDx = clamp(padDelta.x * 0.04, -1, 1);   // 相对拖动（画布任意位置/黑区触控板共用）：手指位移直接驱动战机
-    padDelta.x = 0; padDelta.y = 0;
+  if (mx||my){ const l = Math.hypot(mx,my); P.x += mx/l*sp*dt; P.y += my/l*sp*dt; moveDx = mx/l; }
+  else {
+    const cvv = ctlVec();   // v54：操控点向量（推开方向 × 幅度 → 速度）
+    if (cvv){ P.x += cvv.x*sp*dt; P.y += cvv.y*sp*dt; moveDx = cvv.x; }
   }
   // v12：横移时机翼偏侧 —— 移动方向一侧的机翼下沉，机体随之轻微侧倾
   let bankTarget = 0;
