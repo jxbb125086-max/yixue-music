@@ -1694,6 +1694,7 @@ function resetWorld(){
 }
 function startGameCore(mode){
   G.mode = mode || 'endless'; G.campLayer = 1; G.campClear = false; G.dropBoost = false;
+  G.eliteLastSpawn = 0; G.eliteGoneAt = -100; G.eliteSeen = false; G.eliteRollAcc = 0;
   G.state='play'; G.paused=false; G.t=0; G.scrollTime=0; G.biomeTimer=0; G.biomeIdx=0; G.scrolled=0; G.stormLeft=0;
   G.bossKills=0; G.lastBossIdx=-1; G.nextBossIdx=-1; G.bossDry=0; G.powerLvl=0; G.dmgMul=1; G.visMul=1; G.specCd=1; G.specPower=1; G.score=0; G.kills=0; G.shake=0; G.bannerT=0;
   P.x=W/2; P.y=H-130; P.hp=5; P.gun=1; P.invUntil=0; P.fireCd=0; P.dead=false; P.bank=0;
@@ -5387,10 +5388,22 @@ function update(dt){
     syncGroundBiome();
     foeTimer -= dt; groundTimer -= dt;
     // v17：精英杂兵计时 —— 频率压低、场上最多 1 个、BOSS 战不出
-    eliteTimer -= dt;
-    if (eliteTimer <= 0){
-      eliteTimer = rand(38, 56);
-      if (G.state==='play' && !eliteOnField()) spawnElite();
+    // 战役版（新游戏方案定稿）：精英出现改「概率 + 保底」——每整秒掷 2.2%，
+    // 条件：推进阶段 + 场上无精英 + 开局 20 秒后 + 精英离场满 15 秒；距上次出现满 75 秒必出。
+    {
+      const __eOn = eliteOnField();
+      if (__eOn) G.eliteSeen = true;
+      else if (G.eliteSeen){ G.eliteSeen = false; G.eliteGoneAt = G.t; }
+      if (G.state === 'play'){
+        G.eliteRollAcc = (G.eliteRollAcc || 0) + dt;
+        while (G.eliteRollAcc >= 1){
+          G.eliteRollAcc -= 1;
+          const __pity = G.t - (G.eliteLastSpawn || 0) >= 75;
+          if (!eliteOnField() && G.t > 20 && G.t - (G.eliteGoneAt == null ? -100 : G.eliteGoneAt) >= 15 && (__pity || Math.random() < 0.022)){
+            spawnElite(); G.eliteLastSpawn = G.t;
+          }
+        }
+      }
     }
     const k = Math.min(G.bossKills, 14);
     if (foeTimer <= 0){
