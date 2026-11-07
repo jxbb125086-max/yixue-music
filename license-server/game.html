@@ -587,7 +587,7 @@ function saveSnapshot(){
       score:G.score, kills:G.kills, warnT:G.warnT, ship:G.ship,
       terrainCur:G.terrainCur, blendFrom:G.blendFrom, blendTo:G.blendTo,
       blendSteps:G.blendSteps, blendTotal:G.blendTotal,
-      mode:G.mode || 'endless', campLayer:G.campLayer || 1,
+      mode:G.mode || 'endless', campLayer:G.campLayer || 1, campSingles:G.campSingles || null, campPairs:G.campPairs || null,
     },
     p:{
       x:P.x, y:P.y, hp:P.hp, gun:P.gun, invUntil:P.invUntil, fireCd:P.fireCd,
@@ -634,7 +634,11 @@ function loadGameCore(){
   G.specCd=g.specCd; G.specPower=g.specPower; G.score=g.score; G.kills=g.kills;
   G.warnT=g.warnT; G.ship=g.ship;
   G.mode = g.mode || 'endless'; G.campLayer = g.campLayer || 1; G.campClear = false;
-  G.dropBoost = (G.mode === 'campaign' && G.campLayer === 49);
+  if (g.campSingles) G.campSingles = g.campSingles;
+  if (g.campPairs) G.campPairs = g.campPairs;
+  CAMP_TABLE = [];
+  if (G.mode === 'campaign') buildCampTable();
+  G.dropBoost = (G.mode === 'campaign' && (campEntry(G.campLayer) || {}).type === 'rest');
   G.terrainCur=g.terrainCur; G.blendFrom=g.blendFrom; G.blendTo=g.blendTo;
   G.blendSteps=g.blendSteps; G.blendTotal=g.blendTotal;
   G.shake=0; G.overT=0; G.bannerT=0; G.bannerText=''; G.saveMsg=''; G.saveMsgT=0;
@@ -678,6 +682,7 @@ function loadGameCore(){
   primeAudio();
   burst(P.x,P.y,20,['#7dff8a','#ffd76a','#ffffff']);
   addText(P.x, P.y-52, '读取存档 · 继续出击', '#7dff8a');
+  if (G.mode === 'campaign' && !G.boss){ const __le = campEntry(G.campLayer); if (__le && __le.story) enterStory(__le.story, 'layer'); }
   return true;
 }
 function titleConfirm(){
@@ -740,6 +745,7 @@ addEventListener('keydown', e=>{
   }
   if (e.code === 'Enter'){
     if (G.state==='title') titleConfirm();
+    else if (G.state==='story'){ advanceStory(); }
     else if (G.state==='over' && G.overT>0.6){ if (G.campClear){ G.campClear = false; exitToTitle(); } else if (canContinue()) continueGame(); else startGame(G.mode); }
     else if (G.paused) saveGame();          // v10：暂停时回车保存进度
   }
@@ -752,6 +758,11 @@ function ptrPos(e){
 }
 cv.addEventListener('pointerdown', e=>{
   const p = ptrPos(e);
+  if (G.state==='story'){
+    if (G.storyKind === 'warn5'){ advanceStory(); return; }
+    if (p.x>=STORY_BTN.x && p.x<=STORY_BTN.x+STORY_BTN.w && p.y>=STORY_BTN.y && p.y<=STORY_BTN.y+STORY_BTN.h){ sfx.pow(); advanceStory(); }
+    return;
+  }
   if (G.state==='title'){
     if (p.x>=LIC_BTN.x && p.x<=LIC_BTN.x+LIC_BTN.w && p.y>=LIC_BTN.y && p.y<=LIC_BTN.y+LIC_BTN.h){ openLicBox(); return; }
     if (p.x>=MUSIC_TBTN.x && p.x<=MUSIC_TBTN.x+MUSIC_TBTN.w && p.y>=MUSIC_TBTN.y && p.y<=MUSIC_TBTN.y+MUSIC_TBTN.h){ toggleMusic(); sfx.pow(); return; }
@@ -1606,7 +1617,7 @@ function drawVignette(){
 // ---------- game state ----------
 const G = {
   state:'title', paused:false, t:0, scrollTime:0, biomeTimer:0, biomeIdx:0,
-  bossKills:0, lastBossIdx:-1, nextBossIdx:-1, bossDry:0, powerLvl:0, dmgMul:1, visMul:1, specCd:1, specPower:1, score:0, kills:0, boss:null, boss2:null, warnT:0, mode:'campaign', campLayer:1, titleMode:'campaign', campClear:false, dropBoost:false, bannerT:0, bannerText:'', bannerSub:'',
+  bossKills:0, lastBossIdx:-1, nextBossIdx:-1, bossDry:0, powerLvl:0, dmgMul:1, visMul:1, specCd:1, specPower:1, score:0, kills:0, boss:null, boss2:null, warnT:0, mode:'campaign', campLayer:1, titleMode:'campaign', campClear:false, dropBoost:false, storyKey:'', storyKind:'', storyT:0, chaosT:0, campSingles:null, campPairs:null, bannerT:0, bannerText:'', bannerSub:'',
   shake:0, overT:0, ship:0,
   titleMenu:0, saveMsg:'', saveMsgT:0,
 };
@@ -1616,17 +1627,85 @@ const P = {
   droneCount:0, droneCap:0, droneShots:1, droneFireT:0, droneGuard:0, specCdLv:0, specAtkLv:0,
 };
 let bullets=[], ebs=[], foes=[], grounds=[], parts=[], pows=[], texts=[], beams=[], wrecks=[], decals=[], allies=[], groundBiomeCur='grass';
-// ================= 战役版：50 层战役导演 =================
-const CAMP_SCROLL = 25;   // 战役每层推进段时间（秒），之后 WARNING
-const CAMP_TABLE = [];
-for (let r = 0; r < 2; r++) for (let i = 0; i < 12; i++) CAMP_TABLE.push({ type:'single', idx:i });
-CAMP_TABLE.push({ type:'twin' });                                            // 25 双星要塞·合璧
-[0,1,2,3,4,5,6,7,8,9,10].forEach(i => CAMP_TABLE.push({ type:'single', idx:i, evo:true }));  // 26–36 单体进化返场
-[[1,4],[0,8],[3,5],[6,9],[2,10],[7,0],[4,10],[9,3],[8,6],[5,2],[11,1]].forEach(p => CAMP_TABLE.push({ type:'dual', a:p[0], b:p[1] }));  // 37–47 双体组合
-CAMP_TABLE.push({ type:'twin1' });                                           // 48 合璧残躯 + 双精英
-CAMP_TABLE.push({ type:'rest' });                                            // 49 休整层
-CAMP_TABLE.push({ type:'final' });                                           // 50 终焉母舰·无尽
-function campEntry(layer){ return CAMP_TABLE[layer - 1] || null; }
+// ================= 战役版：剧情与 BOSS 简介 =================
+const BOSS_INTRO = {
+  0:'重装巨人 · 重炮裂空 —— 慢，但每一发都致命',
+  1:'海上要塞 · 三联舰炮 —— 火力覆盖整片海湾',
+  2:'导弹堡垒 —— 它的导弹会追着你拐弯',
+  3:'空天母舰 —— 僚机编制的源头',
+  4:'深海猎手 —— 浮出水面的瞬间最危险',
+  5:'沙漠之王 —— 战斗集群，遮天蔽日',
+  6:'钢铁巨人 —— 脉冲光束，切开街区',
+  7:'轰炸之神 —— 集束炸弹，红圈即是死区',
+  8:'磁轨审判 —— 一击穿云',
+  9:'苍穹之怒 —— 雷霆万钧，无处可藏',
+  10:'沙蝎要塞 —— 蝎尾穿甲，贯穿全军',
+  11:'深渊巨兽 —— 咆哮吞没一切弹幕',
+  12:'双星要塞 —— 双核同体，断其一翼',
+  13:'终焉母舰 —— 一切故事的终点',
+};
+const STORY = {
+  l1:{ t:'第一章 · 启程', lines:['无尽空域的航线一夜之间全部失联，','十二座敌方要塞沿航线次第苏醒。','你是战隼小队最后的飞行员——','点亮引擎，把天空夺回来。'] },
+  l2:{ t:'废墟上空', lines:['戈利亚的残骸还在冒烟，','沧澜的舰队已经封锁了海湾。','舰炮射程之内，没有一片安静的海面。'] },
+  l3:{ t:'堡垒区', lines:['巴斯顿的导弹阵地藏在山坳里，','它的导弹会拐弯——别飞直线。'] },
+  l4:{ t:'空天母舰', lines:['雷达上出现一个移动的阴影：','蜂巢，活的航空母舰。','先打掉它的僚机，再碰本体。'] },
+  l5:{ t:'深海之下', lines:['声呐捕捉到鲨鱼形的轮廓，','它在水下游弋，等你露出破绽。'] },
+  l6:{ t:'荒漠绿洲', lines:['蝎王的甲壳与沙丘一个颜色，','它的集群会像蝗虫一样扑过来。'] },
+  l7:{ t:'钢铁都市', lines:['铁腕盘踞在摩天楼之间，','它的脉冲光束能切开整条街区——','看到红框，立刻离开那一列。'] },
+  l8:{ t:'禁飞区', lines:['天罚的轰炸机群遮住了太阳，','集束炸弹落地之前，地面会先亮起红圈。'] },
+  l9:{ t:'审判高地', lines:['审判的磁轨炮已经充能完毕，','听见「咔」的一声，就意味着下一发要到了。'] },
+  l10:{ t:'高山之巅', lines:['苍穹在云层之上设伏，','雷暴是它的主场——','落雷之前，地面会先标出圈。'] },
+  l11:{ t:'丛林深处', lines:['钳狱的复眼在树冠间反光，','它一直盯着你。别和它对视太久——','它的毒刺，贯穿一切。'] },
+  l12:{ t:'深渊边缘', lines:['航线的尽头，噬星在黑暗中张开了口。','打完这一仗，第一程就结束了。','把十二台要塞的核心，一个个带回来。'] },
+  egg:{ t:'解析报告 · 武器融合', lines:['工程师从要塞残骸里拆出了核心：','把核心装进战机，就能用敌人的招牌技。','而且——重复击破同一台要塞，','核心会再次融合：技能冷却更短、火力更强。','这不是传闻，是写进系统的彩蛋。'] },
+  twin:{ t:'双星要塞 · 合璧', lines:['两座要塞共享一条能源链，','一座是炮，一座是导弹巢。','先断哪一边，你说了算——','但剩下的那一边，会发疯。'] },
+  prep:{ t:'敌势升级', lines:['合璧的残骸信号传回了敌方大本营：','所有要塞开始以进化形态返场，','血量过半后，它们会亮出新招式。','检查你的技能栏——接下来拼的是积累。'] },
+  dualwarn:{ t:'⚠ 合体预警 ⚠', lines:['侦测到复数要塞信号正在重叠——','从这一层起，BOSS 将成对出现，','精英单位也会随时乱入战场。','稳住阵型，别被夹在中间。'] },
+  ending:{ t:'终章 · 天空夺回', lines:['终焉母舰坠入海面，火光照亮了整条航线。','52 层的天空，重新安静下来。','而在航线之外，无尽空域还在延伸——','无尽模式，已经为你解锁。'] },
+};
+const STORY_BTN = { x:170, y:406, w:140, h:42 };
+function enterStory(key, kind){
+  const d = STORY[key];
+  if (!d) return false;
+  G.storyKey = key; G.storyKind = kind; G.storyT = (kind === 'warn5') ? 5 : 0;
+  G.state = 'story';
+  return true;
+}
+function advanceStory(){
+  if (G.storyKind === 'ending'){ G.storyKind = ''; campaignClear(); return; }
+  G.storyKind = ''; G.state = 'play'; G.scrollTime = 0;
+}
+
+// ================= 战役版：52 层战役导演（剧情版） =================
+const CAMP_SCROLL = 25;   // 战役每层默认推进段时间（秒），之后 WARNING；条目可用 scroll 覆盖
+function shuffle12(){
+  const a = [0,1,2,3,4,5,6,7,8,9,10,11];
+  for (let i = a.length - 1; i > 0; i--){ const j = Math.floor(Math.random() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; }
+  return a;
+}
+function genCampRounds(){
+  G.campSingles = shuffle12();                                   // 26–37：12 台进化返场，随机不重复
+  const pairs = [];
+  while (pairs.length < 13){ const sh = shuffle12(); for (let i = 0; i < 12 && pairs.length < 13; i += 2) pairs.push([sh[i], sh[i + 1]]); }
+  G.campPairs = pairs;                                           // 38–50：13 组随机双体（每一轮 6 组内不重复）
+}
+let CAMP_TABLE = [];
+function buildCampTable(){
+  if (!G.campSingles || !G.campPairs) genCampRounds();
+  const T = [];
+  for (let i = 0; i < 12; i++) T.push({ type:'single', idx:i, story:'l' + (i + 1), intro:true, scroll:30 });              // 1–12 首秀：故事页 → 30 秒 → 5 秒简介
+  for (let i = 0; i < 12; i++) T.push({ type:'single', idx:i, story:(i === 0 ? 'egg' : null) });                           // 13–24 二轮（13 层前讲彩蛋）
+  T.push({ type:'twin', story:'twin' });                                                                                    // 25 双星要塞·合璧
+  for (let i = 0; i < 12; i++) T.push({ type:'single', idx:G.campSingles[i], evo:true, story:(i === 0 ? 'prep' : null) });  // 26–37 进化返场（26 层前升级预警）
+  for (let i = 0; i < 13; i++) T.push({ type:'dual', a:G.campPairs[i][0], b:G.campPairs[i][1], eliteChaos:true, warn5:(i === 0) });  // 38–50 随机组合 + 精英乱入（38 层前合体预警 5 秒）
+  T.push({ type:'rest', scroll:15 });                                                                                       // 51 休整 15 秒
+  T.push({ type:'final' });                                                                                                 // 52 终焉母舰·无尽（直接入场，无介绍）
+  CAMP_TABLE = T;
+  return T;
+}
+function campEntry(layer){ if (!CAMP_TABLE.length) buildCampTable(); return CAMP_TABLE[layer - 1] || null; }
+function campTotal(){ if (!CAMP_TABLE.length) buildCampTable(); return CAMP_TABLE.length; }
+function campScrollOf(){ const e = campEntry(G.campLayer); return (e && e.scroll) || CAMP_SCROLL; }
 function campBiomeOf(e){
   if (!e) return -1;
   if (e.type === 'single'){ const d = BOSSES[e.idx]; return d.air ? -1 : d.biome; }
@@ -1659,6 +1738,10 @@ function campLayerSetup(){
   G.bannerText = nm;
   G.bannerSub = (e && e.type === 'rest') ? '补给增援中 · 放松一下' : '';
   G.bannerT = 2.6;
+  // 剧情：本层有故事页（或合体预警）时先进入剧情状态——飞机在无敌地图上滑行，点「确定」才开始刷怪
+  if (e && e.story) enterStory(e.story, 'layer');
+  else if (e && e.warn5) enterStory('dualwarn', 'warn5');
+  if (G.state === 'story') G.bannerT = 0;   // 故事页自带标题，层横幅不再叠着显示
 }
 function campAutosave(){
   try{ localStorage.setItem(SAVE_KEY, JSON.stringify(saveSnapshot())); refreshSaveInfo(); }catch(e){}
@@ -1674,12 +1757,13 @@ function campStartEncounter(){
 }
 function campaignOnBossesCleared(){
   if (G.mode !== 'campaign') return;
-  if (G.campLayer >= 50){ campaignClear(); return; }
+  if (G.campLayer >= campTotal()){ startEnding(); return; }
   G.campLayer++;
   G.scrollTime = 0;
   campLayerSetup();
   campAutosave();
 }
+function startEnding(){ if (!enterStory('ending', 'ending')) campaignClear(); }
 function campaignClear(){
   try{ localStorage.setItem('kongsun_endless_unlocked', '1'); }catch(e){}
   G.campClear = true; G.state = 'over'; G.overT = 0;
@@ -1703,7 +1787,7 @@ function startGameCore(mode){
   P.specCdLv=0; P.specAtkLv=0;
   G.saveMsg=''; G.saveMsgT=0;
   resetWorld(); initTerrain();
-  if (G.mode === 'campaign') campLayerSetup();
+  if (G.mode === 'campaign'){ genCampRounds(); buildCampTable(); campLayerSetup(); }
   groundBiomeCur = G.terrainCur;
   primeAudio();
 }
@@ -1931,7 +2015,7 @@ function castSpecial(id){
   } else if (id==='stinger'){
     // v41：单发伤害 2 → 5，鲜红穿甲针，完全贯穿（每个目标只结算一次，见 collisions）
     for (let i=-2;i<=2;i++)
-      bullets.push({ kind:'spike', x:P.x+i*7, y:P.y-12, vx:i*58, vy:-680, r:5, dmg:specDmg(5), pierce:true, life:1.5 });
+      bullets.push({ kind:'spike', x:P.x+i*7, y:P.y-12, vx:i*58, vy:-680, r:6, dmg:specDmg(5), pierce:true, life:1.5 });
   } else if (id==='devour'){
     const R = Math.round(195 * devourRangeMul());   // v35：基础半径 195 × 范围倍率（含清弹幕半径与光环视觉）
     parts.push({ kind:'ring', x:P.x, y:P.y, r:10, vr:R*3.1, life:0.34, max:0.34, color:'#b8f0ff' });
@@ -2415,8 +2499,7 @@ function updatePlayer(dt){
   if (P.bank > 1) P.bank = 1; else if (P.bank < -1) P.bank = -1;
   if (Math.abs(P.bank) < 0.004) P.bank = 0;
   P.x = clamp(P.x, 20, W-20); P.y = clamp(P.y, 60, H-24);
-  playerFire(dt);
-  autoSpecials();
+  if (G.state !== 'story'){ playerFire(dt); autoSpecials(); }
   // laser specials damage over time
   if (G.t < P.laserUntil){
     const wHalf = P.laserKind==='pulse' ? 34 : 11;
@@ -4153,12 +4236,14 @@ function drawBullets(){
       ctx.fillStyle = '#bff0ff'; ctx.beginPath(); ctx.arc(b.x,b.y,2.9*vm,0,TAU); ctx.fill();
       ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(b.x,b.y,1.3*vm,0,TAU); ctx.fill();
     } else if (b.kind==='spike'){
-      // v41：鲜红针状穿甲刺
+      // 战役版：穿甲刺放大造型 —— 粗大猩红镖头 + 白炽芯 + 双层残影尾迹，高速飞行也看得清
       ctx.save(); ctx.translate(b.x,b.y); ctx.rotate(Math.atan2(b.vy,b.vx)+Math.PI/2);
       ctx.globalCompositeOperation='lighter';
-      ctx.fillStyle='rgba(255,40,30,0.30)'; ctx.beginPath(); ctx.ellipse(0,0,4.4,10,0,0,TAU); ctx.fill();
-      bPoly([[-2.6,9],[2.6,9],[0.8,-6],[0,-14],[-0.8,-6]],'#ff2015','rgba(255,160,150,0.8)',0.8);
-      ctx.fillStyle='#ffffff'; ctx.fillRect(-0.8,-11,1.6,7);
+      for (let gi=2; gi>=1; gi--){ ctx.fillStyle='rgba(255,42,20,'+(0.09*gi)+')'; ctx.beginPath(); ctx.ellipse(0, gi*14, 6.5, 13, 0, 0, TAU); ctx.fill(); }
+      ctx.fillStyle='rgba(255,60,30,0.38)'; ctx.beginPath(); ctx.ellipse(0,0,8.5,17,0,0,TAU); ctx.fill();
+      bPoly([[-5.5,13],[5.5,13],[2.2,-4],[0,-19],[-2.2,-4]],'#ff2413','rgba(255,190,170,0.95)',1.2);
+      ctx.fillStyle='#fff3e8'; ctx.beginPath(); ctx.moveTo(0,-15); ctx.lineTo(1.8,-2); ctx.lineTo(-1.8,-2); ctx.closePath(); ctx.fill();
+      ctx.fillStyle='#ffd2c2'; ctx.fillRect(-1.1,0,2.2,9);
       ctx.restore();
     }
   }
@@ -5074,7 +5159,7 @@ function drawHUD(){
     ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(W/2-70, 10, 140, 6);
     ctx.fillStyle = '#ffb35c'; ctx.fillRect(W/2-70, 10, 140*frac, 6);
     ctx.font = '11px sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(255,255,255,0.8)';
-    ctx.fillText('BOSS 接近中 ' + Math.ceil((G.mode === 'campaign' ? CAMP_SCROLL : BOSS_INTERVAL) - G.scrollTime) + 's', W/2, 28);
+    ctx.fillText('BOSS 接近中 ' + Math.ceil((G.mode === 'campaign' ? campScrollOf() : BOSS_INTERVAL) - G.scrollTime) + 's', W/2, 28);
   }
   for (const __hb of bossList()) drawBossBar(__hb);
   if (P.specCdLv || P.specAtkLv){
@@ -5314,12 +5399,34 @@ function drawScreens(){
   }
   if (G.state==='warn'){
     if (Math.floor(G.t*3)%2===0){
-      ctx.fillStyle = 'rgba(200,30,20,0.14)'; ctx.fillRect(0, 250, W, 120);
+      const __intro = (G.mode === 'campaign' && (campEntry(G.campLayer) || {}).intro && G.nextBossIdx >= 0) ? BOSS_INTRO[G.nextBossIdx] : null;
+      ctx.fillStyle = 'rgba(200,30,20,0.14)'; ctx.fillRect(0, 250, W, __intro ? 176 : 120);
       centerText('⚠ WARNING ⚠', 300, 'bold 40px sans-serif', '#ff5040');
       const def = BOSSES[G.nextBossIdx>=0 ? G.nextBossIdx : 0];
       if (def) centerText(def.title + '「' + def.name + '」接近中', 342, '18px sans-serif', '#ffd76a');
       else centerText('未知威胁接近中', 342, '18px sans-serif', '#ffd76a');
       centerText('第 ' + dispLayer() + ' 层', 372, 'bold 16px sans-serif', '#ff9a7a');
+      if (__intro) centerText(__intro, 404, '13px sans-serif', '#ffe9c9');
+    }
+  }
+  if (G.state === 'story'){
+    const __sd = STORY[G.storyKey];
+    if (__sd){
+      ctx.fillStyle = 'rgba(4,8,16,0.78)'; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = 'rgba(10,16,28,0.94)'; ctx.fillRect(36, 170, W - 72, 300);
+      ctx.strokeStyle = 'rgba(255,215,106,0.75)'; ctx.lineWidth = 1.6; ctx.strokeRect(36, 170, W - 72, 300);
+      ctx.strokeStyle = 'rgba(255,215,106,0.32)'; ctx.lineWidth = 1; ctx.strokeRect(42, 176, W - 84, 288);
+      centerText(__sd.t, 224, 'bold 21px sans-serif', '#ffd76a');
+      ctx.fillStyle = '#ffd76a'; ctx.fillRect(W/2 - 40, 238, 80, 2);
+      __sd.lines.forEach((ln, i) => centerText(ln, 282 + i * 30, '15px sans-serif', '#e8edf2'));
+      if (G.storyKind === 'warn5'){
+        centerText('⚠ ' + Math.ceil(Math.max(0, G.storyT)) + ' ⚠', 432, 'bold 22px sans-serif', '#ff5040');
+      } else {
+        rrPath(STORY_BTN.x, STORY_BTN.y, STORY_BTN.w, STORY_BTN.h, 9);
+        ctx.fillStyle = 'rgba(255,215,106,0.16)'; ctx.fill();
+        ctx.strokeStyle = '#ffd76a'; ctx.lineWidth = 1.4; ctx.stroke();
+        centerText('确 定', STORY_BTN.y + 28, 'bold 17px sans-serif', '#ffd76a');
+      }
     }
   }
   if (G.bannerT > 0){
@@ -5332,7 +5439,7 @@ function drawScreens(){
   if (G.state==='over' && G.campClear){
     ctx.fillStyle = 'rgba(6,10,4,0.82)'; ctx.fillRect(0,0,W,H);
     centerText('通 关', 190, 'bold 46px sans-serif', '#ffd76a');
-    centerText('50 层战役 · 全线击破', 240, 'bold 18px sans-serif', '#7dff8a');
+    centerText('52 层战役 · 全线击破', 240, 'bold 18px sans-serif', '#7dff8a');
     centerText('得分 ' + G.score, 282, '20px sans-serif', '#fff');
     centerText('击破 BOSS ' + G.bossKills + ' 台 · 已移植技能 ' + P.specials.length + ' 项', 316, '14px sans-serif', '#cfd8e2');
     centerText('🏆 无尽模式已解锁', 366, 'bold 17px sans-serif', '#ffd76a');
@@ -5382,6 +5489,10 @@ function update(dt){
   if (G.state==='over'){ G.overT += dt; updateFx(dt); return; }
   if (G.state==='title'){ updateTerrain(dt); return; }
   updateTerrain(dt);
+  if (G.state === 'story'){
+    if (G.storyKind === 'warn5'){ G.storyT -= dt; if (G.storyT <= 0) advanceStory(); }
+    if (G.storyKind === 'ending' && Math.random() < 0.14) parts.push({ kind:'ring', x:rand(40, W - 40), y:rand(80, 330), r:6, vr:rand(120, 230), life:0.5, max:0.5, color: choice(['#ffd76a','#7dff8a','#7ce7ff','#ff9a7a']) });
+  }
   if (G.state==='play' || G.state==='warn'){
     G.scrollTime += dt; G.biomeTimer += dt;
     if (G.biomeTimer > 35 && G.state==='play' && G.mode !== 'campaign'){
@@ -5419,12 +5530,12 @@ function update(dt){
     if (groundTimer <= 0){ spawnGround(); groundTimer = rand(2.2, 3.4) * DIFF.spawn; }
     if (G.mode === 'campaign' && G.state === 'play'){
       const __re = campEntry(G.campLayer);
-      if (__re && __re.type === 'rest' && G.scrollTime >= CAMP_SCROLL){
+      if (__re && __re.type === 'rest' && G.scrollTime >= campScrollOf()){
         G.campLayer++; G.scrollTime = 0; campLayerSetup(); campAutosave();
       }
     }
-    if (G.state==='play' && G.scrollTime >= (G.mode === 'campaign' ? CAMP_SCROLL : BOSS_INTERVAL)){
-      G.state = 'warn'; G.warnT = 3; sfx.warn();
+    if (G.state==='play' && G.scrollTime >= (G.mode === 'campaign' ? campScrollOf() : BOSS_INTERVAL)){
+      G.state = 'warn'; G.warnT = (G.mode === 'campaign' && (campEntry(G.campLayer) || {}).intro) ? 5 : 3; sfx.warn();
       if (G.mode === 'campaign'){
         G.nextBossIdx = campWarnIdx(campEntry(G.campLayer));
         const __cb2 = campBiomeOf(campEntry(G.campLayer));
@@ -5447,6 +5558,13 @@ function update(dt){
     if (__dl.length === 2){ const __p = __dl[0], __q = __dl[1], __dx = __q.x - __p.x;
       if (Math.abs(__dx) < 120 && Math.abs(__p.y - __q.y) < 90){ const __push = (120 - Math.abs(__dx)) / 2 + 1, __sgn = __dx >= 0 ? 1 : -1;
         __p.x = clamp(__p.x - __sgn * __push, __p.r, W - __p.r); __q.x = clamp(__q.x + __sgn * __push, __q.r, W - __q.r); } } }
+  if (G.state === 'boss' && G.mode === 'campaign'){
+    const __ce2 = campEntry(G.campLayer);
+    if (__ce2 && __ce2.eliteChaos){
+      G.chaosT = (G.chaosT || 0) + dt;
+      if (G.chaosT >= 1){ G.chaosT = 0; if (!eliteOnField() && Math.random() < 0.05) spawnElite(); }
+    }
+  }
   updateBullets(dt);
   updateFx(dt);
   collisions();
