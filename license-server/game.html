@@ -476,43 +476,42 @@ const PAUSE_MENU = [
   { key:'resume',  x:140, y:334, w:200, h:52, label:'继续战斗', sub:'', col:'#9adcff' },
   { key:'restart', x:140, y:400, w:200, h:52, label:'返回标题', sub:'重选机体 · 载入进度', col:'#ff9a7a' },   // v50：按用户要求，暂停重来=回标题页
 ];
-// v34：手机操控双模式 —— drag 手指拖动 / stick 虚拟摇杆；标题页左下角切换，选择持久保存
-let ctrlMode = 'drag';
-try { if (localStorage.getItem('kongya_kongsun_ctrl') === 'stick') ctrlMode = 'stick'; } catch(e) {}
-const CTRL_BTN = { x:14, y:660, w:168, h:44 };
-const STICK = { x:80, y:600, r:52, kr:23 };   // v50：上移 18px，底部留操作余量
-const PAUSE_BTN = { x:W-66, y:600, r:26 };   // v50：与摇杆同排上移
-let stickVec = null, stickPid = null;
-function setStick(p){
-  let dx = (p.x - STICK.x)/STICK.r, dy = (p.y - STICK.y)/STICK.r;
-  const m = Math.hypot(dx, dy);
-  if (m > 1){ dx /= m; dy /= m; }
-  stickVec = { x:dx, y:dy };
-}
-// v51：黑边摇杆 —— 画面靠上后，下方黑区足够大（>=150px）时把虚拟摇杆放到黑区中央（DOM 元件，独立接管触摸）；
-// 空间不足（桌面/矮屏）自动回退到画布内左下摇杆。判定在 layoutPad，模式切换/窗口尺寸变化时重算。
-let stickDom = false, padEl = null, knobEl = null, padPid = null, padCenter = { x:0, y:0 };
-const PAD_R = 54;
+// v52：操控统一为一种 —— 黑区触控板（下方模块）/ 画布内拖动 / 键盘鼠标，无模式切换（v34 双模式与 v51 黑边摇杆退役）
+const PAUSE_BTN = { x:W-66, y:600, r:26 };   // 右下暂停钮（v50 上移留操作余量）
+let touchPadOn = false, padEl = null, dotEl = null, padPid = null, padLast = null;
+const padDelta = { x:0, y:0 };
 let __padW = -1, __padH = -1;
 function ensurePad(){
   if (padEl) return;
   padEl = document.createElement('div');
-  padEl.id = 'stickPad';
-  padEl.style.cssText = 'position:fixed;width:118px;height:118px;border-radius:50%;border:2px solid rgba(154,220,255,.5);background:rgba(10,16,28,.4);display:none;z-index:30;touch-action:none;transform:translate(-50%,-50%)';
-  knobEl = document.createElement('div');
-  knobEl.style.cssText = 'position:absolute;left:50%;top:50%;width:52px;height:52px;border-radius:50%;background:rgba(154,220,255,.45);border:2px solid rgba(220,240,255,.65);transform:translate(-50%,-50%);pointer-events:none';
-  padEl.appendChild(knobEl);
+  padEl.id = 'touchPad';
+  padEl.style.cssText = 'position:fixed;display:none;z-index:30;touch-action:none;border-top:1px solid rgba(154,220,255,.14);background:rgba(120,180,255,0.03)';
+  dotEl = document.createElement('div');
+  dotEl.style.cssText = 'position:absolute;width:56px;height:56px;border-radius:50%;background:rgba(154,220,255,.18);border:1.5px solid rgba(154,220,255,.4);transform:translate(-50%,-50%);display:none;pointer-events:none';
+  padEl.appendChild(dotEl);
   document.body.appendChild(padEl);
-  const setFromEvent = e => {
-    let dx = (e.clientX - padCenter.x) / PAD_R, dy = (e.clientY - padCenter.y) / PAD_R;
-    const m = Math.hypot(dx, dy);
-    if (m > 1){ dx /= m; dy /= m; }
-    stickVec = { x: dx, y: dy };
-    knobEl.style.transform = 'translate(calc(-50% + ' + (dx * 30) + 'px), calc(-50% + ' + (dy * 30) + 'px))';
-  };
-  padEl.addEventListener('pointerdown', e => { padPid = e.pointerId; try { padEl.setPointerCapture(e.pointerId); } catch(err) {} setFromEvent(e); e.preventDefault(); });
-  padEl.addEventListener('pointermove', e => { if (e.pointerId === padPid) setFromEvent(e); });
-  const endPad = e => { if (e.pointerId === padPid){ padPid = null; stickVec = null; knobEl.style.transform = 'translate(-50%,-50%)'; } };
+  function moveDot(e){
+    const pr = padEl.getBoundingClientRect();
+    dotEl.style.left = (e.clientX - pr.left) + 'px';
+    dotEl.style.top = (e.clientY - pr.top) + 'px';
+  }
+  padEl.addEventListener('pointerdown', e => {
+    if (padPid !== null) return;
+    padPid = e.pointerId; padLast = { x: e.clientX, y: e.clientY };
+    try { padEl.setPointerCapture(e.pointerId); } catch(err) {}
+    dotEl.style.display = 'block'; moveDot(e);
+    e.preventDefault();
+  });
+  padEl.addEventListener('pointermove', e => {
+    if (e.pointerId !== padPid || !padLast) return;
+    const r = cv.getBoundingClientRect();
+    const g = (480 / r.width) * 1.15;   // CSS 位移 → 游戏位移，1.15 倍灵敏度（触控板式相对操控）
+    padDelta.x += (e.clientX - padLast.x) * g;
+    padDelta.y += (e.clientY - padLast.y) * g;
+    padLast = { x: e.clientX, y: e.clientY };
+    moveDot(e);
+  });
+  const endPad = e => { if (e.pointerId === padPid){ padPid = null; padLast = null; dotEl.style.display = 'none'; } };
   padEl.addEventListener('pointerup', endPad);
   padEl.addEventListener('pointercancel', endPad);
 }
@@ -521,12 +520,20 @@ function layoutPad(){
   const r = cv.getBoundingClientRect();
   const vh = (window.visualViewport ? window.visualViewport.height : window.innerHeight);
   const below = vh - r.bottom;
-  stickDom = ctrlMode === 'stick' && below >= 150;
-  if (stickDom){
-    padCenter = { x: r.left + r.width / 2, y: r.bottom + below / 2 };
-    padEl.style.left = padCenter.x + 'px';
-    padEl.style.top = padCenter.y + 'px';
-  } else if (padPid !== null){ padPid = null; stickVec = null; }
+  touchPadOn = below >= 120;
+  if (touchPadOn){
+    padEl.style.left = r.left + 'px';
+    padEl.style.top = r.bottom + 'px';
+    padEl.style.width = r.width + 'px';
+    padEl.style.height = below + 'px';
+  } else if (padPid !== null){ padPid = null; padLast = null; padDelta.x = 0; padDelta.y = 0; dotEl.style.display = 'none'; }
+}
+function syncPad(){
+  if (!padEl) return;
+  if (window.innerWidth !== __padW || window.innerHeight !== __padH){ __padW = window.innerWidth; __padH = window.innerHeight; layoutPad(); }
+  const show = touchPadOn && (G.state==='play' || G.state==='boss' || G.state==='warn') && !G.paused && !P.dead;
+  const want = show ? 'block' : 'none';
+  if (padEl.style.display !== want) padEl.style.display = want;
 }
 addEventListener('resize', layoutPad);
 if (window.visualViewport) window.visualViewport.addEventListener('resize', layoutPad);
@@ -741,14 +748,8 @@ function ptrPos(e){
 cv.addEventListener('pointerdown', e=>{
   const p = ptrPos(e);
   if (G.state==='title'){
-    if (p.x>=MUSIC_TBTN.x && p.x<=MUSIC_TBTN.x+MUSIC_TBTN.w && p.y>=MUSIC_TBTN.y && p.y<=MUSIC_TBTN.y+MUSIC_TBTN.h){ toggleMusic(); sfx.pow(); return; }
     if (p.x>=LIC_BTN.x && p.x<=LIC_BTN.x+LIC_BTN.w && p.y>=LIC_BTN.y && p.y<=LIC_BTN.y+LIC_BTN.h){ openLicBox(); return; }
-    if (p.x>=CTRL_BTN.x && p.x<=CTRL_BTN.x+CTRL_BTN.w && p.y>=CTRL_BTN.y && p.y<=CTRL_BTN.y+CTRL_BTN.h){
-      ctrlMode = ctrlMode==='drag' ? 'stick' : 'drag';
-      try { localStorage.setItem('kongya_kongsun_ctrl', ctrlMode); } catch(e) {}
-      layoutPad();
-      sfx.pow(); return;
-    }
+    if (p.x>=MUSIC_TBTN.x && p.x<=MUSIC_TBTN.x+MUSIC_TBTN.w && p.y>=MUSIC_TBTN.y && p.y<=MUSIC_TBTN.y+MUSIC_TBTN.h){ toggleMusic(); sfx.pow(); return; }
     const hit = shipCardHit(p.x,p.y);
     if (hit>=0){ G.ship = hit; sfx.pow(); return; }   // 点卡片只选机体，不立刻开局
     const mk = menuHit(p.x,p.y,TITLE_MENU);
@@ -775,18 +776,15 @@ cv.addEventListener('pointerdown', e=>{
   if ((G.state==='play'||G.state==='boss'||G.state==='warn') && !P.dead){
     if (Math.hypot(p.x-MUSIC_BTN.x, p.y-MUSIC_BTN.y) <= MUSIC_BTN.r + 8){ toggleMusic(); return; }   // v46：音乐开关
     if (Math.hypot(p.x-PAUSE_BTN.x, p.y-PAUSE_BTN.y) <= PAUSE_BTN.r + 8){   // 右下角暂停钮
-      G.paused = true; touchTarget = null; stickVec = null; stickPid = null; return;
+      G.paused = true; touchTarget = null; padPid = null; padLast = null; padDelta.x = 0; padDelta.y = 0; return;
     }
-    if (ctrlMode==='stick' && !stickDom){ stickPid = e.pointerId; setStick(p); return; }  // 虚拟摇杆接管（黑边模式由 DOM 摇杆负责）
   }
   touchTarget = p;
 });
 cv.addEventListener('pointermove', e=>{
-  if (stickPid !== null && e.pointerId === stickPid){ setStick(ptrPos(e)); return; }
   if (touchTarget) touchTarget = ptrPos(e);
 });
 addEventListener('pointerup', e=>{
-  if (stickPid !== null && e && e.pointerId === stickPid){ stickPid = null; stickVec = null; }
   touchTarget = null;
 });
 
@@ -2298,9 +2296,10 @@ function updatePlayer(dt){
   if (keys['ArrowUp']||keys['KeyW']) my -= 1;
   if (keys['ArrowDown']||keys['KeyS']) my += 1;
   let moveDx = 0;
-  if (mx||my){ const l = Math.hypot(mx,my); P.x += mx/l*sp*dt; P.y += my/l*sp*dt; touchTarget = null; moveDx = mx/l; }
-  else if (stickVec && Math.hypot(stickVec.x, stickVec.y) > 0.12){
-    P.x += stickVec.x*sp*dt; P.y += stickVec.y*sp*dt; moveDx = stickVec.x;   // 摇杆：向量含幅度，推满 = 全速
+  if (mx||my){ const l = Math.hypot(mx,my); P.x += mx/l*sp*dt; P.y += my/l*sp*dt; touchTarget = null; padDelta.x = 0; padDelta.y = 0; moveDx = mx/l; }
+  else if (padDelta.x || padDelta.y){
+    P.x += padDelta.x; P.y += padDelta.y; moveDx = clamp(padDelta.x * 0.04, -1, 1);   // 黑区触控板：手指相对位移直接驱动战机
+    padDelta.x = 0; padDelta.y = 0;
   }
   else if (touchTarget){
     const dx = touchTarget.x - P.x, dy = (touchTarget.y-46) - P.y;
@@ -4942,7 +4941,7 @@ function drawScreens(){
       ctx.beginPath(); ctx.moveTo(40,402); ctx.lineTo(W-40,402); ctx.stroke();
       ctx.save(); ctx.translate(W/2, 402); ctx.rotate(Math.PI/4); ctx.fillStyle = 'rgba(255,215,106,0.55)'; ctx.fillRect(-2.4, -2.4, 4.8, 4.8); ctx.restore(); }
     // 下方只保留键位介绍
-    centerText('方向键 / WASD 移动 · 自动开火 · 拖动屏幕也可移动', 424, '13px sans-serif', '#e8edf2');
+    centerText('方向键 / WASD 移动 · 自动开火 · 触摸拖动也可移动', 424, '13px sans-serif', '#e8edf2');
     centerText('空格 暂停 · M 静音', 446, '13px sans-serif', '#e8edf2');
     // v10：↑ ↓ 选择 / 回车确定的「新游戏 · 继续游戏」菜单
     centerText('↑ ↓ 选择模式 · 回车 确定', 510, 'bold 12px sans-serif', Math.floor(G.t*2)%2 ? '#ffd76a' : '#fff');
@@ -4950,24 +4949,6 @@ function drawScreens(){
       const m=TITLE_MENU[i];
       drawMenuButton(m, G.titleMenu===i, '');
     }
-    // v34：左下角操控模式切换
-    rrPath(CTRL_BTN.x, CTRL_BTN.y, CTRL_BTN.w, CTRL_BTN.h, 8);
-    ctx.fillStyle = 'rgba(8,16,28,0.68)'; ctx.fill();
-    ctx.strokeStyle = 'rgba(154,220,255,0.65)'; ctx.lineWidth = 1.4; ctx.stroke();
-    ctx.textAlign = 'center';
-    ctx.font = '11px sans-serif'; ctx.fillStyle = 'rgba(154,220,255,0.9)';
-    ctx.fillText('操 控 模 式', CTRL_BTN.x + CTRL_BTN.w/2, CTRL_BTN.y + 16);
-    ctx.font = 'bold 14px sans-serif'; ctx.fillStyle = '#ffd76a';
-    ctx.fillText(ctrlMode==='stick' ? '虚拟摇杆' : '手指拖动', CTRL_BTN.x + CTRL_BTN.w/2, CTRL_BTN.y + 36);
-    // 部署版：右下角授权码入口
-    rrPath(LIC_BTN.x, LIC_BTN.y, LIC_BTN.w, LIC_BTN.h, 8);
-    ctx.fillStyle = 'rgba(8,16,28,0.68)'; ctx.fill();
-    ctx.strokeStyle = LIC.admin ? 'rgba(255,215,106,0.85)' : 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1.4; ctx.stroke();
-    ctx.textAlign = 'center';
-    ctx.font = '11px sans-serif'; ctx.fillStyle = 'rgba(200,215,232,0.8)';
-    ctx.fillText('授 权 码', LIC_BTN.x + LIC_BTN.w/2, LIC_BTN.y + 16);
-    ctx.font = 'bold 14px sans-serif'; ctx.fillStyle = LIC.admin ? '#ffd76a' : (LIC.code ? '#7dff8a' : '#e8edf2');
-    ctx.fillText(licStatusText(), LIC_BTN.x + LIC_BTN.w/2, LIC_BTN.y + 36);
     // v46：底栏中央音乐开关
     rrPath(MUSIC_TBTN.x, MUSIC_TBTN.y, MUSIC_TBTN.w, MUSIC_TBTN.h, 8);
     ctx.fillStyle = 'rgba(8,16,28,0.68)'; ctx.fill();
@@ -4977,6 +4958,15 @@ function drawScreens(){
     ctx.fillText('音 乐', MUSIC_TBTN.x + MUSIC_TBTN.w/2, MUSIC_TBTN.y + 16);
     ctx.font = 'bold 14px sans-serif'; ctx.fillStyle = musicOn ? '#ffd76a' : 'rgba(210,220,230,0.65)';
     ctx.fillText(musicOn ? '♪ 开' : '♪ 关', MUSIC_TBTN.x + MUSIC_TBTN.w/2, MUSIC_TBTN.y + 36);
+    // 部署版：右下角授权码入口
+    rrPath(LIC_BTN.x, LIC_BTN.y, LIC_BTN.w, LIC_BTN.h, 8);
+    ctx.fillStyle = 'rgba(8,16,28,0.68)'; ctx.fill();
+    ctx.strokeStyle = LIC.admin ? 'rgba(255,215,106,0.85)' : 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1.4; ctx.stroke();
+    ctx.textAlign = 'center';
+    ctx.font = '11px sans-serif'; ctx.fillStyle = 'rgba(200,215,232,0.8)';
+    ctx.fillText('授 权 码', LIC_BTN.x + LIC_BTN.w/2, LIC_BTN.y + 16);
+    ctx.font = 'bold 14px sans-serif'; ctx.fillStyle = LIC.admin ? '#ffd76a' : (LIC.code ? '#7dff8a' : '#e8edf2');
+    ctx.fillText(licStatusText(), LIC_BTN.x + LIC_BTN.w/2, LIC_BTN.y + 36);
     if (G.saveMsgT>0 && G.saveMsg) centerText(G.saveMsg, 674, 'bold 13px sans-serif', '#ff9a7a');
   }
   if (G.state==='warn'){
@@ -5108,6 +5098,7 @@ function render(){
   drawVignette();
   ctx.restore();
   if (G.state!=='title') drawHUD();
+  syncPad();
   drawTouchUI();
   drawScreens();
 }
@@ -5133,26 +5124,6 @@ function drawTouchUI(){
   ctx.font = 'bold 15px sans-serif'; ctx.textAlign = 'center';
   ctx.fillText('♪', MUSIC_BTN.x, MUSIC_BTN.y + 5);
   if (!musicOn){ ctx.strokeStyle = '#ff7a6e'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(MUSIC_BTN.x - 8, MUSIC_BTN.y + 8); ctx.lineTo(MUSIC_BTN.x + 8, MUSIC_BTN.y - 8); ctx.stroke(); }
-  ctx.restore();
-  // v51：黑边摇杆显隐同步（尺寸变化时先重算布局）
-  if (padEl){
-    if (window.innerWidth !== __padW || window.innerHeight !== __padH){ __padW = window.innerWidth; __padH = window.innerHeight; layoutPad(); }
-    const show = stickDom && (G.state==='play' || G.state==='boss' || G.state==='warn') && !G.paused && !P.dead;
-    const want = show ? 'block' : 'none';
-    if (padEl.style.display !== want) padEl.style.display = want;
-  }
-  // 左下角虚拟摇杆（仅摇杆模式；黑边摇杆接管时不画）
-  if (ctrlMode !== 'stick' || stickDom) return;
-  const kx = STICK.x + (stickVec ? stickVec.x * 30 : 0), ky = STICK.y + (stickVec ? stickVec.y * 30 : 0);
-  ctx.save();
-  ctx.fillStyle = 'rgba(8,16,28,0.42)';
-  ctx.beginPath(); ctx.arc(STICK.x, STICK.y, STICK.r, 0, TAU); ctx.fill();
-  ctx.strokeStyle = 'rgba(154,220,255,0.5)'; ctx.lineWidth = 1.6;
-  ctx.beginPath(); ctx.arc(STICK.x, STICK.y, STICK.r, 0, TAU); ctx.stroke();
-  ctx.fillStyle = stickVec ? 'rgba(154,220,255,0.75)' : 'rgba(154,220,255,0.45)';
-  ctx.beginPath(); ctx.arc(kx, ky, STICK.kr, 0, TAU); ctx.fill();
-  ctx.strokeStyle = 'rgba(232,240,246,0.7)'; ctx.lineWidth = 1.2;
-  ctx.beginPath(); ctx.arc(kx, ky, STICK.kr, 0, TAU); ctx.stroke();
   ctx.restore();
 }
 let lastTs = 0, frameErrors = 0, lastErrAt = -1e9, __ftAcc = 0, __ftN = 0;
