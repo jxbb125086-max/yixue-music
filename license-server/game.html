@@ -485,10 +485,10 @@ const MODE_TBTN = { x:84, y:484, w:312, h:36 };   // 整体命中区
 const NAME_BTN = { x:14,  y:648, w:150, h:44 };
 const LIC_BTN  = { x:316, y:648, w:150, h:44 };
 const MEDAL_SLOTS = [
-  { key:'lord',  name:'无尽领主', col:'#ffd76a' },
-  { key:'abyss', name:'深渊霸主', col:'#b58cff' },
-  { key:null,    name:'未开放',   col:'#5a6878' },
-  { key:null,    name:'未开放',   col:'#5a6878' },
+  { key:'elite', name:'空域精英', col:'#7ce7ff', glow:'rgba(124,231,255,', fill:'#1f5f7a' },
+  { key:'brave', name:'无尽勇者', col:'#ff9a5c', glow:'rgba(255,154,92,',  fill:'#8a4a21' },
+  { key:'lord',  name:'无尽领主', col:'#ffd76a', glow:'rgba(255,215,106,', fill:'#c99a2c' },
+  { key:'abyss', name:'深渊霸主', col:'#b58cff', glow:'rgba(181,140,255,', fill:'#6243a8' },
 ];
 const PILOT_KEY = 'kongyuan_v1_pilot';
 const LIC_KEY   = 'kongyuan_v1_license';
@@ -850,7 +850,7 @@ cv.addEventListener('pointerdown', e=>{
       const mb = MODE_BTNS.find(m => p.x>=m.x && p.x<=m.x+m.w && p.y>=m.y && p.y<=m.y+m.h);
       if (mb){
         if (mb.key==='endless' && !endlessUnlocked()){ G.saveMsg = '通关战役后开放无尽'; G.saveMsgT = 2.6; beep(180, 0.18, 'square', 0.05); }
-        else if (mb.key==='abyss' && !abyssUnlocked()){ G.saveMsg = '完成无尽 100 层后开放深渊'; G.saveMsgT = 2.6; beep(180, 0.18, 'square', 0.05); }
+        else if (mb.key==='abyss' && !abyssUnlocked()){ G.saveMsg = '无尽 60 层终极 BOSS 击破后开放深渊'; G.saveMsgT = 2.6; beep(180, 0.18, 'square', 0.05); }
         else { G.titleMode = mb.key; sfx.pow(); }
       }
       return;
@@ -1855,10 +1855,11 @@ function campaignOnBossesCleared(){
 }
 function startEnding(){ if (!enterStory('ending', 'ending')) campaignClear(); }
 function campaignClear(){
+  grantMedal('elite');
   try{ localStorage.setItem('kongyuan_v1_endless', '1'); }catch(e){}
   G.clearKind = 'campaign'; G.campClear = true; G.state = 'over'; G.overT = 0;
 }
-// 无尽 100 层通关 → 开放深渊；深渊 50 轮通关 → 全模式通关
+// 无尽 60 层终极 BOSS 击破 → 开放深渊并授「无尽勇者」；无尽 100 层通关授「无尽领主」；深渊 50 轮通关 → 全模式通关
 function endlessClear(){
   grantMedal('lord');
   try{ localStorage.setItem('kongyuan_v1_abyss', '1'); }catch(e){}
@@ -3398,7 +3399,8 @@ function bossFinish(b){
       G.boss = null; G.boss2 = null; G.boss3 = null; G.state = 'play'; G.scrollTime = 0;
     }
     if (b.ultimate){
-      // 第 60 层终极 BOSS 击破：开放深渊，但无尽本局继续推进到第 100 层
+      // 第 60 层终极 BOSS 击破：开放深渊并授「无尽勇者」，但无尽本局继续推进到第 100 层
+      grantMedal('brave');
       try{ localStorage.setItem('kongyuan_v1_abyss', '1'); }catch(e){}
       G.bannerText = '深渊模式已开放'; G.bannerSub = '继续无尽远航 · 第 100 层终局不变';
       G.bannerStat = false; G.bannerT = 3.6;
@@ -5869,18 +5871,17 @@ function drawMedalPanel(){
     if (got){
       const pulse=0.55+0.45*Math.sin(G.t*2.2+i);
       const gr=ctx.createRadialGradient(cx,cy,3,cx,cy,28);
-      gr.addColorStop(0, m.key==='lord' ? 'rgba(255,215,106,'+(0.24+0.18*pulse).toFixed(3)+')'
-                                        : 'rgba(181,140,255,'+(0.24+0.18*pulse).toFixed(3)+')');
+      gr.addColorStop(0, (m.glow||'rgba(181,140,255,')+(0.24+0.18*pulse).toFixed(3)+')');
       gr.addColorStop(1,'rgba(0,0,0,0)');
       ctx.fillStyle=gr; ctx.beginPath(); ctx.arc(cx,cy,28,0,TAU); ctx.fill();
       ctx.translate(cx,cy); ctx.rotate(G.t*0.5+i);
-      ctx.strokeStyle=m.key==='lord'?'rgba(255,215,106,0.55)':'rgba(181,140,255,0.55)';
+      ctx.strokeStyle=(m.glow||'rgba(181,140,255,')+'0.55)';
       ctx.lineWidth=1.2;
       for(let k=0;k<8;k++){ const a=TAU*k/8; ctx.beginPath(); ctx.moveTo(Math.cos(a)*20,Math.sin(a)*20); ctx.lineTo(Math.cos(a)*25,Math.sin(a)*25); ctx.stroke(); }
       ctx.rotate(-(G.t*0.5+i));
       ctx.beginPath();
       for(let k=0;k<6;k++){ const a=TAU*k/6-Math.PI/2, px=Math.cos(a)*16, py=Math.sin(a)*16; k?ctx.lineTo(px,py):ctx.moveTo(px,py); }
-      ctx.closePath(); ctx.fillStyle=m.key==='lord'?'#c99a2c':'#6243a8'; ctx.fill();
+      ctx.closePath(); ctx.fillStyle=m.fill||'#6243a8'; ctx.fill();
       ctx.strokeStyle=m.col; ctx.lineWidth=1.8; ctx.stroke();
       ctx.font='bold 13px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillStyle='#fff8dc';
       ctx.fillText(m.key==='lord'?'★':'◈',0,1);
