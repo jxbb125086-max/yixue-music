@@ -1,9 +1,0 @@
-{
-  "name": "kongyuan-license-server",
-  "version": "1.0.0",
-  "private": true,
-  "description": "空隼·无限永航 授权码服务（激活/排行榜/云存档 + 游戏页托管）",
-  "main": "server.js",
-  "scripts": { "start": "node server.js" },
-  "engines": { "node": ">=18" }
-}
