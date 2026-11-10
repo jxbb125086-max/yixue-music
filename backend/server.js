@@ -21,6 +21,32 @@ const io = new Server(httpServer, { cors: { origin: '*' } });
 const SITE_PASSWORD = process.env.SITE_PASSWORD || 'rush1980';
 const GATE_TOKEN = crypto.createHash('sha256').update('yixue-gate:' + SITE_PASSWORD).digest('hex');
 const GATE_COOKIE = 'yixue_gate';
+const ROOM_COOKIE = 'yixue_room';
+
+/* 学生免密：老师发出的链接形如 /student/<房间号>，打开即发一张绑定该房间的
+   房间 Cookie（24 小时），凭它能加载学生页与资源、连 Socket 加入这间房，
+   但打不开老师页、不能建房。房间号不存在时加入动作本身会被忽略。 */
+function roomToken(roomId) {
+    return crypto.createHash('sha256').update('yixue-room:' + SITE_PASSWORD + ':' + roomId).digest('hex');
+}
+function roomCookieValue(roomId) {
+    return ROOM_COOKIE + '=' + roomId + '.' + roomToken(roomId) + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400';
+}
+function roomIdFromCookie(cookieHeader) {
+    if (!cookieHeader) return null;
+    for (const part of String(cookieHeader).split(';')) {
+        const i = part.indexOf('=');
+        if (i > 0 && part.slice(0, i).trim() === ROOM_COOKIE) {
+            const v = part.slice(i + 1).trim();
+            const dot = v.indexOf('.');
+            if (dot > 0) {
+                const rid = v.slice(0, dot);
+                if (/^\d{6}$/.test(rid) && v.slice(dot + 1) === roomToken(rid)) return rid;
+            }
+        }
+    }
+    return null;
+}
 
 function gateCookieOk(cookieHeader) {
     if (!cookieHeader) return false;
@@ -77,12 +103,24 @@ app.post('/gate', express.urlencoded({ extended: false }), (req, res) => {
 app.use((req, res, next) => {
     if (req.path === '/gate' || req.path === '/api/health') return next();
     if (gateCookieOk(req.headers.cookie)) return next();
+    const stu = req.path.match(/^\/student\/(\d{6})\/?$/);
+    if (stu) {   /* 学生链接：发房间 Cookie 并放行（应用外壳由后面的静态/回退处理） */
+        res.setHeader('Set-Cookie', roomCookieValue(stu[1]));
+        return next();
+    }
+    if (roomIdFromCookie(req.headers.cookie) &&
+        (req.path.startsWith('/assets/') || req.path === '/favicon.svg' || /^\/student\/\d{6}\/?$/.test(req.path))) {
+        return next();
+    }
     if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'password required' });
     return res.redirect('/gate');
 });
 
 io.use((socket, next) => {
-    if (gateCookieOk(socket.request.headers.cookie)) return next();
+    const ck = socket.request.headers.cookie;
+    if (gateCookieOk(ck)) { socket.data.gate = 'full'; return next(); }
+    const rid = roomIdFromCookie(ck);
+    if (rid) { socket.data.gate = 'room'; socket.data.roomId = rid; return next(); }
     return next(new Error('password required'));
 });
 
@@ -154,6 +192,7 @@ io.on('connection', socket => {
 
     // ── 创建房间（老师，带姓名）──
     socket.on('create-room', ({ teacherName = '老师' } = {}, cb) => {
+        if (socket.data.gate !== 'full') return cb && cb(null);
         const roomId = generateRoomId();
         rooms[roomId] = { users: [socket.id], teacher: socket.id, teacherName, chatHistory: [], speaking: null };
         users[socket.id] = { name: teacherName, role: 'teacher', room: roomId, micOn: true };
@@ -163,6 +202,7 @@ io.on('connection', socket => {
 
     // ── 加入房间（学生）──
     socket.on('join-room', ({ roomId, userName = '学员' }) => {
+        if (socket.data.gate === 'room' && String(roomId) !== socket.data.roomId) return;
         if (!rooms[roomId]) return;
         users[socket.id] = { name: userName, role: 'student', room: roomId, micOn: false };
         if (!rooms[roomId].users.includes(socket.id)) rooms[roomId].users.push(socket.id);
