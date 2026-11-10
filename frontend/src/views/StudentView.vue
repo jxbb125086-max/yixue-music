@@ -89,13 +89,18 @@
 
         <!-- 音频设置 -->
         <div class="audio-bar card">
-          <div class="audio-group">
+          <div v-if="speakState === 'live'" class="audio-group">
             <span class="audio-label">🎤 麦克风</span>
             <el-select v-model="selectedMic" size="small" class="audio-select" @change="onMicChange">
               <el-option v-for="d in audioDevices.mics" :key="d.deviceId"
                 :label="d.label || '麦克风 ' + (audioDevices.mics.indexOf(d)+1)" :value="d.deviceId" />
             </el-select>
             <div class="vol-bar sm"><div class="vol-fill" :style="{ width: micVolume + '%' }"></div></div>
+            <div class="gain-row">
+              <span class="gain-label">音量</span>
+              <el-slider v-model="micGainPct" :min="0" :max="150" :show-tooltip="false" class="gain-slider" />
+              <span class="gain-val">{{ micGainPct }}%</span>
+            </div>
           </div>
           <div class="audio-group hide-m">
             <span class="audio-label">🔊 扬声器</span>
@@ -216,6 +221,7 @@ const roomId = ref('')
 // ── 连线状态：idle(灰) → invited(绿·待接受) → live(绿·连线中) ──
 const speakState = ref('idle')
 const micOn = ref(false)
+const micGainPct = ref(100)   // 麦克风音量拉杆：发送增益 0–150%
 
 // ── 聊天 ──
 const chatMessages = ref([])
@@ -233,7 +239,9 @@ let socket = null
 let socketClosed = false
 let peer = null
 let lastStream = null      // 记住直播流：万一浏览器把它从 video 上摘掉，能立刻接回去
-let micStream = null       // 自己的麦克风流（连线时推给老师）
+let micStream = null       // 自己的麦克风流（只在连线期间存在，断开即停轨关闭）
+let sendStream = null      // 经增益后真正推给老师的流（连线时才建）
+let micCtx = null, micSrcNode = null, micGainNode = null
 let pendingAddStream = false // peer 未就绪时接受连线，就绪后补推
 let audioContext = null, analyser = null, volumeInterval = null
 
@@ -456,54 +464,99 @@ function onConnectClick() {
         return
     }
     if (speakState.value === 'invited') {
-        // 接受连线：把自己的麦克风推进 peer
-        speakState.value = 'live'
+        // 接受连线：这一刻才第一次打开麦克风，经增益后推给老师
         micOn.value = true
-        addMicToPeer()
-        socket.emit('accept-speak', { roomId: roomId.value })
-        ElMessage.success('已连线，大家能听到你了')
+        openMicAndSend().then(() => {
+            speakState.value = 'live'
+            socket.emit('accept-speak', { roomId: roomId.value })
+            ElMessage.success('已连线，大家能听到你了')
+        }).catch(e => {
+            micOn.value = false
+            console.error('打开麦克风失败', e)
+            ElMessage.error('麦克风打开失败，请检查浏览器权限后重试')
+        })
         return
     }
-    // live → 主动断开：收麦、停轨
+    // live → 主动断开：收麦并彻底关闭麦克风（停轨，浏览器录音指示消失）
     speakState.value = 'idle'
     micOn.value = false
-    removeMicFromPeer()
+    closeMicFully()
     socket.emit('end-speak', { roomId: roomId.value })
 }
+watch(micGainPct, v => { if (micGainNode) micGainNode.gain.value = v / 100 })
 function toggleMic() {
     if (speakState.value !== 'live') return
     micOn.value = !micOn.value
-    if (micStream) micStream.getAudioTracks().forEach(t => { t.enabled = micOn.value })
+    if (sendStream) sendStream.getAudioTracks().forEach(t => { t.enabled = micOn.value })
     socket.emit('toggle-mic', roomId.value)
 }
 
 function addMicToPeer() {
-    if (!micStream) return
+    if (!sendStream) return
     if (peer && !peer.destroyed) {
-        try { peer.addStream(micStream) } catch (e) { console.error('addStream 失败', e) }
+        try { peer.addStream(sendStream) } catch (e) { console.error('addStream 失败', e) }
         pendingAddStream = false
     } else {
         pendingAddStream = true // peer 就绪后补推
     }
 }
 function removeMicFromPeer() {
-    if (peer && !peer.destroyed && micStream) {
-        try { peer.removeStream(micStream) } catch (e) { }
+    if (peer && !peer.destroyed && sendStream) {
+        try { peer.removeStream(sendStream) } catch (e) { }
     }
     pendingAddStream = false
-    if (micStream) micStream.getAudioTracks().forEach(t => { t.enabled = true })
+}
+/* 打开麦克风并建立发送链：原始麦流 → 增益（音量拉杆）→ 发送流 → peer。
+   只在学员点「接受连线」时调用；此前页面不碰麦克风。 */
+async function openMicAndSend() {
+    if (!micStream) {
+        micStream = await getStuMicStream()
+        startVolumeDetection(micStream)
+        refreshDeviceLabels()
+    }
+    if (!sendStream) {
+        micCtx = new (window.AudioContext || window.webkitAudioContext)()
+        micSrcNode = micCtx.createMediaStreamSource(micStream)
+        micGainNode = micCtx.createGain()
+        micGainNode.gain.value = micGainPct.value / 100
+        const dest = micCtx.createMediaStreamDestination()
+        micSrcNode.connect(micGainNode)
+        micGainNode.connect(dest)
+        sendStream = dest.stream
+    }
+    if (micCtx.state === 'suspended') micCtx.resume()
+    sendStream.getAudioTracks().forEach(t => { t.enabled = micOn.value })
+    addMicToPeer()
+}
+/* 彻底关闭麦克风：撤下发送流、拆增益链、停原始麦轨（设备释放） */
+function closeMicFully() {
+    removeMicFromPeer()
+    if (micSrcNode) { try { micSrcNode.disconnect() } catch (e) { } micSrcNode = null }
+    micGainNode = null
+    if (micCtx) { micCtx.close().catch(() => { }); micCtx = null }
+    sendStream = null
+    if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null }
+    stopVolumeDetection()
+}
+/* 拿到麦克风权限后设备名才可见，补刷一遍下拉列表 */
+async function refreshDeviceLabels() {
+    try {
+        const devices = await navigator.mediaDevices.enumerateDevices()
+        audioDevices.mics = devices.filter(d => d.kind === 'audioinput')
+        audioDevices.speakers = devices.filter(d => d.kind === 'audiooutput')
+    } catch (e) { }
 }
 
 // ── 音频设备 ──
 async function getAudioDevices() {
+    /* 默认不开麦克风、不弹权限：只枚举设备占位（没授权前设备名为空是浏览器
+       隐私规则，连线开麦后由 refreshDeviceLabels 补上）。麦克风等老师邀请、
+       学员点「接受连线」时才打开（见 openMicAndSend）。 */
     try {
-        const temp = await navigator.mediaDevices.getUserMedia({ audio: true })
-        temp.getTracks().forEach(t => t.stop())
         const devices = await navigator.mediaDevices.enumerateDevices()
         audioDevices.mics = devices.filter(d => d.kind === 'audioinput')
         audioDevices.speakers = devices.filter(d => d.kind === 'audiooutput')
         if (audioDevices.mics.length > 0 && !selectedMic.value) selectedMic.value = audioDevices.mics[0].deviceId
-        await startMicDetection()
     } catch (e) { console.error('获取设备失败', e) }
 }
 /* 音乐模式 SDP：把 Opus 协商参数拉到立体声 + 256kbps 高码率，
@@ -538,12 +591,6 @@ async function getStuMicStream() {
         throw e
     }
 }
-async function startMicDetection() {
-    try {
-        micStream = await getStuMicStream()
-        startVolumeDetection(micStream)
-    } catch (e) { console.error('[麦克风检测] 失败:', e) }
-}
 function startVolumeDetection(mediaStream) {
     stopVolumeDetection()
     if (!mediaStream?.getAudioTracks().length) return
@@ -568,23 +615,17 @@ function stopVolumeDetection() {
     micVolume.value = 0
 }
 async function onMicChange() {
+    if (speakState.value !== 'live' || !micStream) return   // 未连线只记录选择，不开麦
     try {
         const s = await getStuMicStream()
         const old = micStream
         micStream = s
         startVolumeDetection(s)
-        // 连线中切换：把连接里的音频发送轨直接换成新轨（旧版只换了检测流，
-        // 还把旧轨停掉——老师那边就再也听不到声音了，等于切换没生效）
-        if (peer && !peer.destroyed && speakState.value === 'live') {
-            const newTrack = s.getAudioTracks()[0]
-            const sender = peer._pc?.getSenders?.().find(x => x.track && x.track.kind === 'audio')
-            let swapped = false
-            if (sender && newTrack) { try { await sender.replaceTrack(newTrack); swapped = true } catch (e) { } }
-            if (!swapped) {
-                try { if (old) peer.removeStream(old) } catch (e) { }
-                try { peer.addStream(s) } catch (e) { }
-            }
-            if (!micOn.value) s.getAudioTracks().forEach(t => { t.enabled = false })   // 静音状态延续
+        // 发送轨还是同一条增益出口，只把增益的入口换成新麦克风，连接不用动
+        if (micCtx && sendStream && micGainNode) {
+            if (micSrcNode) { try { micSrcNode.disconnect() } catch (e) { } }
+            micSrcNode = micCtx.createMediaStreamSource(s)
+            micSrcNode.connect(micGainNode)
         }
         if (old && old !== s) old.getTracks().forEach(t => t.stop())
         ElMessage.success('麦克风已切换')
@@ -621,7 +662,7 @@ function initializeConnection() {
         if (speaking && speaking.studentId === socket.id) {
             speakState.value = speaking.status === 'live' ? 'live' : 'invited'
             micOn.value = speaking.status === 'live'
-            if (speakState.value === 'live') addMicToPeer()
+            if (speakState.value === 'live') openMicAndSend().catch(() => { })
         }
     })
     socket.on('connect', () => { myId.value = socket.id })
@@ -638,7 +679,7 @@ function initializeConnection() {
     socket.on('speak-ended', () => {
         speakState.value = 'idle'
         micOn.value = false
-        removeMicFromPeer()
+        closeMicFully()
     })
     // 自己的麦克风状态（全员静音等场景）
     socket.on('user-mic-update', ({ id, micOn: m }) => {
@@ -684,13 +725,13 @@ function initializeConnection() {
                 peer.on('error', err => console.error('Peer error', err))
                 peer.on('close', () => { connected.value = false; peer = null })
                 // 连接时已在连线中 → 补推麦克风
-                if (speakState.value === 'live' && micStream) {
-                    try { peer.addStream(micStream) } catch (e) { }
+                if (speakState.value === 'live' && sendStream) {
+                    try { peer.addStream(sendStream) } catch (e) { }
                 }
             }
             peer.signal(signal)
-            if (pendingAddStream && micStream) {
-                try { peer.addStream(micStream); pendingAddStream = false } catch (e) { }
+            if (pendingAddStream && sendStream) {
+                try { peer.addStream(sendStream); pendingAddStream = false } catch (e) { }
             }
         } catch (err) { console.error('信号处理错误', err) }
     })
@@ -718,7 +759,7 @@ function disconnectAll() {
     }
     if (peer) { try { peer.destroy() } catch (e) { }; peer = null }
     connected.value = false
-    stopVolumeDetection()
+    closeMicFully()
 }
 
 watch(() => chatMessages.value.length, () => {
@@ -978,6 +1019,10 @@ html.stage-locked .live-main { gap: 0; }
 .audio-label { font-size: .82rem; color: var(--text-2); white-space: nowrap; }
 .audio-select { width: 10rem; }
 .vol-bar.sm { width: 4.5rem; flex: none; }
+.gain-row { display: flex; align-items: center; gap: .45rem; flex: 1 1 10rem; min-width: 9rem; }
+.gain-label { font-size: .78rem; opacity: .75; white-space: nowrap; }
+.gain-slider { flex: 1; min-width: 4.5rem; }
+.gain-val { font-size: .78rem; min-width: 2.6em; text-align: right; opacity: .85; }
 
 /* ═══ 桌面连线卡（右栏、公屏上方）═══
    原来那条横在画面下方的大按钮太占地方，这里压成一行：状态点 + 文案 + 一个按钮。 */

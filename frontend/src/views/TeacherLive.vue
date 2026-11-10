@@ -307,6 +307,44 @@ let peers = {}            // studentId → SimplePeer
 let stream = null         // 屏幕共享流
 let micStream = null      // 推给学生的麦克风流
 let peerStream = null     // 推给学生的完整流（画面+麦声）
+let classMix = null       // 课堂混音台：麦克风 + 排版台标签页声音 → 混成一条发送轨
+/* 开混音台：排版台标签页的声音（只有它自己放的音乐/伴奏）与麦克风各经一个
+   增益进同一出口。发送侧始终是出口这一条轨，课中切麦克风只换入口、不用重协商。 */
+function startClassMix(micS, tabTrack) {
+    teardownClassMix()
+    const ctx = new (window.AudioContext || window.webkitAudioContext)()
+    const dest = ctx.createMediaStreamDestination()
+    const tabSrc = ctx.createMediaStreamSource(new MediaStream([tabTrack]))
+    const tabGain = ctx.createGain(); tabGain.gain.value = 1
+    tabSrc.connect(tabGain); tabGain.connect(dest)
+    classMix = { ctx, dest, tabSrc, tabGain, micSrc: null, micGain: null, micStream: null }
+    if (micS) classMixSetMic(micS)
+    if (ctx.state === 'suspended') {
+        ctx.resume()
+        const iv = setInterval(() => {
+            if (!classMix || classMix.ctx !== ctx || ctx.state === 'running') { clearInterval(iv); return }
+            ctx.resume()
+        }, 1000)
+        setTimeout(() => clearInterval(iv), 6000)
+    }
+}
+function classMixSetMic(s) {
+    if (!classMix) return
+    if (classMix.micSrc) { try { classMix.micSrc.disconnect() } catch (e) { } classMix.micSrc = null }
+    if (classMix.micStream && classMix.micStream !== s) classMix.micStream.getTracks().forEach(t => t.stop())
+    classMix.micStream = s
+    if (!classMix.micGain) {
+        classMix.micGain = classMix.ctx.createGain(); classMix.micGain.gain.value = 1
+        classMix.micGain.connect(classMix.dest)
+    }
+    classMix.micSrc = classMix.ctx.createMediaStreamSource(s)
+    classMix.micSrc.connect(classMix.micGain)
+}
+function teardownClassMix() {
+    if (!classMix) return
+    try { classMix.ctx.close() } catch (e) { }
+    classMix = null
+}
 let recorder = null
 let recordingChunks = []
 let audioContext = null, analyser = null, micSource = null, volumeInterval = null
@@ -571,6 +609,7 @@ function applyMicStreamToClass(s) {
     if (teacherMicStream && teacherMicStream !== s) teacherMicStream.getTracks().forEach(t => t.stop())
     teacherMicStream = s
     startVolumeDetection(s)
+    if (classMix) { classMixSetMic(s); micStream = s; return }
     const newTrack = s.getAudioTracks()[0]
     if (!newTrack || !peerStream) return
     const oldTrack = peerStream.getAudioTracks()[0]
@@ -872,11 +911,13 @@ async function startClass() {
             // 桌面端：屏幕共享 + 麦克风。排版台标签页在「开始上课」时已打开，
             // 系统框里选它即可；共享流到手后等令牌并裁到画布（见 beginPianoHandshake）
             const pianoP = beginPianoHandshake()
-            // 不抓系统声音：发给学员的只有麦克风轨，抓了系统声只会让本地预览把学员的
-            // 声音再放出来一遍、加重回声；peerStream 本来也不用这条轨
+            // 抓排版台标签页的声音一起发：这条轨里只有排版台自己放的音乐/伴奏
+            // （学员的声音在教学页里播放，不在这个标签页里，不会串进来），与麦克风
+            // 混音后发送；本地预览是静音的，这条声不会被本地再放一遍，不加重回声。
+            // 共享的是窗口/整屏时浏览器不给这条轨，自动退回只有麦克风的老行为。
             stream = await navigator.mediaDevices.getDisplayMedia({
                 video: { cursor: 'hidden', frameRate: 15 },
-                audio: false
+                audio: true
             })
             // 排版台画布：等令牌最多 2.5 秒（超时按整页共享走）；裁失败自动回退整页画面
             if (pianoP) await Promise.race([pianoP, new Promise(r => setTimeout(r, 2500))])
@@ -896,10 +937,21 @@ async function startClass() {
             try { micStream = await getMicStream() }
             catch (e) { console.warn('麦克风获取失败，学生可能听不到声音', e); micStream = null }
 
-            peerStream = new MediaStream([
-                ...stream.getVideoTracks(),
-                ...(micStream ? micStream.getAudioTracks() : [])
-            ])
+            const tabAudio = stream.getAudioTracks()[0] || null
+            if (tabAudio) {
+                startClassMix(micStream, tabAudio)
+                peerStream = new MediaStream([
+                    ...stream.getVideoTracks(),
+                    classMix.dest.stream.getAudioTracks()[0]
+                ])
+                ElMessage.success('🎵 排版台的声音已接入，学员能听到你放的音乐了')
+            } else {
+                peerStream = new MediaStream([
+                    ...stream.getVideoTracks(),
+                    ...(micStream ? micStream.getAudioTracks() : [])
+                ])
+                ElMessage.warning('没抓到排版台的声音：共享时请选「标签页」并勾上「分享标签页音频」；现在学员只能听到麦克风')
+            }
         } catch (e) {
             console.error('屏幕共享失败', e)
             let msg = '获取屏幕共享失败'
@@ -1071,6 +1123,7 @@ function endClass() {
             peers = {}
             if (stream) stream.getTracks().forEach(t => t.stop())
             if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null }
+            teardownClassMix()
             stopCamSource()   // 关摄像头源
             peerStream = null
             stopVolumeDetection()
@@ -1120,6 +1173,7 @@ onBeforeUnmount(() => {
     Object.keys(studentAudios).forEach(stopStudentAudio)
     if (stream) stream.getTracks().forEach(t => t.stop())
     if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null }
+    teardownClassMix()
     stopCamSource()
     peerStream = null
     if (socket) socket.disconnect()
