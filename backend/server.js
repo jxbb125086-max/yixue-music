@@ -5,6 +5,7 @@ const express = require('express');
 const path = require('path');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
+const crypto = require('crypto');
 
 function generateRoomId() {
     return String(Math.floor(100000 + Math.random() * 900000));
@@ -13,6 +14,77 @@ function generateRoomId() {
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin: '*' } });
+
+
+/* ── 入口密码门：整站共用一个密码，输对一次本设备 30 天免输 ──
+   密码可用环境变量 SITE_PASSWORD 覆盖；Cookie 只存密码的哈希令牌，不存明文。 */
+const SITE_PASSWORD = process.env.SITE_PASSWORD || 'rush1980';
+const GATE_TOKEN = crypto.createHash('sha256').update('yixue-gate:' + SITE_PASSWORD).digest('hex');
+const GATE_COOKIE = 'yixue_gate';
+
+function gateCookieOk(cookieHeader) {
+    if (!cookieHeader) return false;
+    for (const part of String(cookieHeader).split(';')) {
+        const i = part.indexOf('=');
+        if (i > 0 && part.slice(0, i).trim() === GATE_COOKIE) {
+            return part.slice(i + 1).trim() === GATE_TOKEN;
+        }
+    }
+    return false;
+}
+
+const GATE_PAGE = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>易学音乐</title>
+<style>
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; background:#141419; font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+  .card { width:min(320px,86vw); background:#1e1e28; border:1px solid #34344a; border-radius:14px; padding:28px 24px; text-align:center; }
+  h1 { color:#f0e9dc; font-size:20px; margin:0 0 6px; letter-spacing:2px; }
+  p { color:#9a9aad; font-size:13px; margin:0 0 18px; }
+  input { width:100%; box-sizing:border-box; padding:11px 12px; border-radius:8px; border:1px solid #34344a; background:#141419; color:#fff; font-size:16px; text-align:center; }
+  button { width:100%; margin-top:12px; padding:11px; border:0; border-radius:8px; background:#c9a45c; color:#141419; font-size:15px; font-weight:700; cursor:pointer; }
+  .err { color:#ff7a7a; font-size:13px; margin-top:12px; display:none; }
+</style>
+</head>
+<body>
+  <form class="card" method="POST" action="/gate">
+    <h1>易学音乐</h1>
+    <p>请输入访问密码</p>
+    <input type="password" name="pw" autocomplete="current-password" autofocus>
+    <button type="submit">进入</button>
+    <div class="err" id="err">密码不正确，请重试</div>
+  </form>
+  <script>if (new URLSearchParams(location.search).has('e')) document.getElementById('err').style.display = 'block';</script>
+</body>
+</html>`;
+
+app.get('/gate', (req, res) => {
+    if (gateCookieOk(req.headers.cookie)) return res.redirect('/');
+    res.type('html').send(GATE_PAGE);
+});
+
+app.post('/gate', express.urlencoded({ extended: false }), (req, res) => {
+    if (req.body && req.body.pw === SITE_PASSWORD) {
+        res.setHeader('Set-Cookie', GATE_COOKIE + '=' + GATE_TOKEN + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000');
+        return res.redirect('/');
+    }
+    return res.redirect('/gate?e=1');
+});
+
+app.use((req, res, next) => {
+    if (req.path === '/gate' || req.path === '/api/health') return next();
+    if (gateCookieOk(req.headers.cookie)) return next();
+    if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'password required' });
+    return res.redirect('/gate');
+});
+
+io.use((socket, next) => {
+    if (gateCookieOk(socket.request.headers.cookie)) return next();
+    return next(new Error('password required'));
+});
 
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
